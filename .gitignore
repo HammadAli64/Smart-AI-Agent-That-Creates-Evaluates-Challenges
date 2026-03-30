@@ -17,8 +17,8 @@ node_modules/
 out/
 
 # Large local uploads (keep folder via Backend .gitignore + .gitkeep)
-Syndicate/Backend/data/uploads/*
-!Syndicate/Backend/data/uploads/.gitkeep
+Backend/data/uploads/*
+!Backend/data/uploads/.gitkeep
 
 # IDE / OS
 .idea/
