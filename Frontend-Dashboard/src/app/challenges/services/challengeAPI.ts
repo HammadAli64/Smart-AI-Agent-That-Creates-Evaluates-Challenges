@@ -3,8 +3,10 @@
  * Reuses the same API base as challengesApi.ts (NEXT_PUBLIC_SYNDICATE_API_URL).
  */
 import { challengesApiUrl } from "./challengesApi";
+import { getSyndicateAuthHeaders } from "@/lib/syndicateAuth";
+import { syndicateUserStorageKey } from "@/lib/syndicateStorageKeys";
 
-export type MoodId = "energetic" | "happy" | "sad" | "tired";
+export type MoodId = "energetic" | "happy" | "tired";
 
 export type MoodChallengeResult = {
   title: string;
@@ -18,15 +20,24 @@ export type GenerateChallengesResponse = {
   detail?: string;
 };
 
+function readSyndicateDeviceId(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.localStorage.getItem(syndicateUserStorageKey("device_id")) ?? undefined;
+}
+
 /** Two validated challenges for the given mood and category (requires ingested mindsets on the server). */
 export async function generateChallenges(
   mood: MoodId | string,
-  category: string
+  category: string,
+  opts?: { deviceId?: string }
 ): Promise<GenerateChallengesResponse> {
+  const deviceId = opts?.deviceId ?? readSyndicateDeviceId();
+  const body: Record<string, string> = { mood: mood.trim(), category: category.trim() };
+  if (deviceId) body.device_id = deviceId;
   const r = await fetch(challengesApiUrl("generate/"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mood: mood.trim(), category: category.trim() })
+    headers: getSyndicateAuthHeaders(true),
+    body: JSON.stringify(body)
   });
   const j = (await r.json()) as GenerateChallengesResponse & { detail?: string };
   if (!r.ok) {

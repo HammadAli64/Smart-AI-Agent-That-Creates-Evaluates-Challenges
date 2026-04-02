@@ -173,7 +173,7 @@ The "challenges" array MUST have length 2. First object slot 1, second object sl
 
 
 def daily_category_moods_system_prompt(category: str) -> str:
-    """System prompt: 8 challenges for one category (4 moods × 2 slots)."""
+    """System prompt: 6 challenges for one category (3 moods × 2 slots; sad is not used)."""
     c = (category or "").strip().lower()
     if c not in ("business", "money", "fitness", "power", "grooming"):
         raise ValueError("invalid category for daily_category_moods_system_prompt")
@@ -183,24 +183,23 @@ def daily_category_moods_system_prompt(category: str) -> str:
 **Mood-specific tone (each row must match its mood only):**
 - energetic: High-energy, activating, momentum-building tasks that push the user forward.
 - happy: Very positive, joyful, celebratory framing; lean into optimism and gratitude.
-- sad: Comforting, gentle, validating tasks that meet the user with empathy.
 - tired: Relaxing, low-effort, restorative micro-steps; conserve energy.
 
-**suitable_moods**: First element MUST be the row's mood (energetic, happy, sad, or tired). You may add 1–2 short optional tags.
+Do **not** use a "sad" mood. Only energetic, happy, and tired.
 
-Generate EXACTLY 8 challenges for category **{c}** in this fixed order:
+**suitable_moods**: First element MUST be the row's mood (energetic, happy, or tired). You may add 1–2 short optional tags.
+
+Generate EXACTLY 6 challenges for category **{c}** in this fixed order:
 1. mood energetic, slot 1
 2. mood energetic, slot 2
 3. mood happy, slot 1
 4. mood happy, slot 2
-5. mood sad, slot 1
-6. mood sad, slot 2
-7. mood tired, slot 1
-8. mood tired, slot 2
+5. mood tired, slot 1
+6. mood tired, slot 2
 
 Each object must set "category" to "{c}", and "mood" / "slot" exactly as listed for that row.
 
-Respond with valid JSON only, exactly this shape (8 objects in the array):
+Respond with valid JSON only, exactly this shape (6 objects in the array):
 {{
   "challenges": [
     {{
@@ -219,7 +218,9 @@ Respond with valid JSON only, exactly this shape (8 objects in the array):
   ]
 }}
 
-The "challenges" array MUST have length 8. Follow the mood/slot order strictly; every challenge_title must be unique within this array.
+The "challenges" array MUST have length 6. Follow the mood/slot order strictly; every challenge_title must be unique within this array.
+
+If the user JSON includes "user_personalization", use it to make this batch feel **distinct for that user** (fresh angles and wording vs generic output), while still obeying every rule above and avoiding titles in titles_to_avoid.
 """
 
 
@@ -252,6 +253,47 @@ Respond with valid JSON only, exactly this shape:
 }}
 
 The "challenges" array MUST have length 2.
+"""
+
+USER_CUSTOM_CHALLENGE_EXPAND_SYSTEM = """You are an expert mindset coach. The user wrote a short task title and picked a difficulty. Your job is to expand it into a full challenge card that matches the stored document mindsets (themes only, no verbatim copying).
+
+Rules:
+- Use the user's **exact** challenge_title string from the input JSON (do not shorten or rename it in output).
+- difficulty must echo the user's chosen value: easy, medium, or hard (lowercase).
+- **challenge_description**: at least 5 sentences (about 90–160 words), concrete and actionable.
+- **example_tasks**: exactly 3 strings; each full sentence, at least 14 words.
+- **benefits_list**: exactly 3 strings; each full sentence, at least 12 words.
+- **based_on_mindset**: one short label tying the task to a mindset theme from stored_mindsets.
+- **suitable_moods**: array starting with "custom", then 1–3 mood tags that fit (energetic, happy, tired).
+
+If **existing_user_mindset_summary** is non-empty, align tone and priorities with what it says about this user.
+
+Respond with valid JSON only:
+{
+  "challenge_title": "",
+  "difficulty": "medium",
+  "challenge_description": "",
+  "example_tasks": ["", "", ""],
+  "benefits_list": ["", "", ""],
+  "based_on_mindset": "",
+  "suitable_moods": ["custom", "energetic"]
+}
+
+The challenge_title in JSON must be identical to the input user_title.
+"""
+
+USER_DEVICE_MINDSET_MERGE_SYSTEM = """You maintain a short running profile of what a user cares about based on tasks they create.
+
+Input JSON has:
+- previous_summary (string, may be empty)
+- new_task: title, difficulty, one_sentence_focus (what the expanded task is about)
+
+Output valid JSON only:
+{
+  "summary": "At most 6 short sentences, third person, no bullet list. Merge previous_summary with insights from new_task. Drop redundant old detail. Total under 900 characters."
+}
+
+Do not repeat the full task text; capture themes, values, and energy level the user seems to want.
 """
 
 AGENT_QUOTE_SYSTEM = """You are the Syndicate voice: a sharp, cyberpunk-tinged mindset coach (not a corporate assistant).

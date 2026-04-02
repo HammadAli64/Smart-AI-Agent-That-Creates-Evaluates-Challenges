@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -57,6 +58,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'corsheaders',
     'api',
     'apps.challenges.apps.ChallengesConfig',
@@ -141,6 +143,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
@@ -152,11 +157,30 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [],
-    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
 }
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+
+# Python 3.14+: Django 4.2's BaseContext.__copy__ used copy(super()), which breaks
+# because super() is copyable in 3.14+ (Django #35844; fixed in Django 5.2+).
+if sys.version_info >= (3, 14):
+    from copy import copy as _copy_context_dicts
+
+    from django.template.context import BaseContext as _BaseContext
+
+    def _base_context_copy(self):
+        duplicate = _BaseContext()
+        duplicate.__class__ = self.__class__
+        duplicate.__dict__ = _copy_context_dicts(self.__dict__)
+        duplicate.dicts = self.dicts[:]
+        return duplicate
+
+    _BaseContext.__copy__ = _base_context_copy

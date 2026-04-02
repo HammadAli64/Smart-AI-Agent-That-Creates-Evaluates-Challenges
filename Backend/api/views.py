@@ -11,7 +11,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from apps.challenges.models import GeneratedChallenge
-from apps.challenges.services import ensure_daily_challenges
+from apps.challenges.services import ensure_daily_challenges_for_device
 
 from .models import MindsetKnowledge, UploadedDocument
 from .services.document_extract import extract_text, file_sha256, truncate
@@ -257,7 +257,8 @@ def syndicate_bootstrap(request):
 
     if auto_challenge and mindset_ok:
         before = GeneratedChallenge.objects.filter(challenge_date=timezone.localdate()).count()
-        ok, rows, err = ensure_daily_challenges(force_regenerate=False)
+        device_key = f"user:{request.user.id}"
+        ok, rows, err = ensure_daily_challenges_for_device(device_key, force_regenerate=False)
         if not ok and err:
             return Response(
                 {

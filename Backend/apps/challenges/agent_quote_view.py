@@ -8,19 +8,19 @@ from rest_framework.response import Response
 
 from api.models import MindsetKnowledge
 
-from .services import ensure_agent_quote_for_today
+from .services import ensure_agent_quote_for_user
 
 
 @api_view(["GET"])
 def agent_quote_today(request):
-    """AI-generated Syndicate brief for today; cached one row per calendar date."""
+    """AI-generated Syndicate brief for today; one cached row per user per calendar date."""
     today_iso = timezone.localdate().isoformat()
     if not MindsetKnowledge.objects.exists():
         return Response(
             {"quote": "", "date": today_iso, "detail": "Ingest a document first."},
             status=status.HTTP_200_OK,
         )
-    ok, text, err = ensure_agent_quote_for_today()
+    ok, text, err = ensure_agent_quote_for_user(request.user)
     if not ok:
         code = status.HTTP_503_SERVICE_UNAVAILABLE if err and "OPENAI_API_KEY" in (err or "") else status.HTTP_502_BAD_GATEWAY
         return Response({"quote": "", "date": today_iso, "detail": err or "Failed"}, status=code)

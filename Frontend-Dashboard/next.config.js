@@ -3,6 +3,12 @@ const nextConfig = {
   reactStrictMode: true,
   devIndicators: {
     buildActivity: false
+  },
+  async redirects() {
+    return [
+      { source: "/challenges", destination: "/", permanent: false },
+      { source: "/challenges/:path*", destination: "/", permanent: false }
+    ];
   }
 };
 

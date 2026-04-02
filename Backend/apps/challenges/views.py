@@ -1,24 +1,212 @@
 """REST API for challenges and referral streak restore."""
 from __future__ import annotations
 
+import re
 import secrets
-from datetime import timedelta
+from datetime import timedelta, datetime
+from urllib.parse import quote
 
+from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from api.models import MindsetKnowledge
 
-from .models import GeneratedChallenge, LeaderboardEntry, ReferralRestore
+from .models import (
+    AdminAssignedTask,
+    AdminTaskSubmission,
+    GeneratedChallenge,
+    LeaderboardEntry,
+    ReferralRestore,
+    SyndicateUserProgress,
+)
+
+ADMIN_TASK_VISIBILITY_HOURS = 5
+ADMIN_TASK_MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 from .services import (
+    create_user_custom_challenge,
     ensure_category_pair,
     ensure_daily_challenges,
+    ensure_daily_challenges_for_device,
     generate_challenges,
     run_generate,
+    score_mission_response,
     serialize_challenge_row,
 )
+
+def _user_device_key(request) -> str:
+    return f"user:{request.user.id}"
+
+
+def _prune_old_challenge_rows() -> None:
+    """Remove system/custom challenge rows whose calendar date is more than 2 days before today."""
+    today = timezone.localdate()
+    cutoff = today - timedelta(days=2)
+    GeneratedChallenge.objects.filter(challenge_date__lt=cutoff).delete()
+
+
+def _normalize_streak_on_read(obj: SyndicateUserProgress, today) -> None:
+    """If the user missed at least one calendar day of activity, reset streak and keep restore hints in JSON state."""
+    last = obj.last_activity_date
+    if last is None or obj.streak_count <= 0:
+        return
+    if (today - last).days < 2:
+        return
+    cur = dict(obj.state or {})
+    if "streak_before_break" not in cur:
+        cur["streak_before_break"] = str(obj.streak_count)
+    cur["streak_break_date"] = today.isoformat()
+    obj.streak_count = 0
+    obj.state = cur
+    obj.save(update_fields=["streak_count", "state", "updated_at"])
+
+
+USER_LEADERBOARD_ID_RE = re.compile(r"^user:(\d+)$")
+
+
+# Keys mirrored in Frontend-Dashboard `syndicateProgressSync.ts` (excludes per-browser `device_id`).
+SYNDICATE_ALLOWED_STATE_KEYS = frozenset(
+    {
+        "points_history_v1",
+        "challenge_day_v1",
+        "completed_challenge_ids",
+        "points_total",
+        "challenge_responses",
+        "mission_started_at_v1",
+        "redeemed_rewards_v1",
+        "pounds_balance_v1",
+        "mission_scores_v1",
+        "mission_awarded_points_v1",
+        "streak_before_break",
+        "streak_break_date",
+        "display_name",
+        "profile_image_url",
+    }
+)
+
+
+@api_view(["GET", "PATCH"])
+def syndicate_progress(request):
+    """GET: dashboard JSON state plus server-backed streak fields. PATCH: merge `state` (streak lives in DB columns)."""
+    if request.method == "GET":
+        obj, _ = SyndicateUserProgress.objects.get_or_create(
+            user=request.user, defaults={"state": {}, "streak_count": 0, "last_activity_date": None}
+        )
+        today = timezone.localdate()
+        _normalize_streak_on_read(obj, today)
+        obj.refresh_from_db()
+        return Response(
+            {
+                "state": obj.state or {},
+                "streak_count": obj.streak_count,
+                "last_activity_date": obj.last_activity_date.isoformat() if obj.last_activity_date else None,
+            }
+        )
+
+    incoming = request.data.get("state")
+    if not isinstance(incoming, dict):
+        return Response({"detail": "state must be an object"}, status=status.HTTP_400_BAD_REQUEST)
+
+    obj, _ = SyndicateUserProgress.objects.get_or_create(
+        user=request.user, defaults={"state": {}, "streak_count": 0, "last_activity_date": None}
+    )
+    cur = dict(obj.state or {})
+    for k, v in incoming.items():
+        if k not in SYNDICATE_ALLOWED_STATE_KEYS:
+            continue
+        if v is None:
+            cur.pop(k, None)
+        elif isinstance(v, str):
+            cur[k] = v
+        else:
+            cur[k] = str(v)
+    obj.state = cur
+    obj.save(update_fields=["state", "updated_at"])
+    return Response(
+        {
+            "state": obj.state,
+            "streak_count": obj.streak_count,
+            "last_activity_date": obj.last_activity_date.isoformat() if obj.last_activity_date else None,
+        }
+    )
+
+
+@api_view(["POST"])
+def syndicate_streak_record(request):
+    """
+    Call once when the user completes their first mission of a calendar day.
+    Rules: consecutive days → streak+1; missed ≥1 day → streak resets to 1 for today (chain restarted).
+    """
+    today = timezone.localdate()
+    raw = request.data.get("activity_date")
+    if raw:
+        try:
+            today = datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
+    with transaction.atomic():
+        obj, _ = SyndicateUserProgress.objects.select_for_update().get_or_create(
+            user=request.user,
+            defaults={"state": {}, "streak_count": 0, "last_activity_date": None},
+        )
+        if obj.last_activity_date == today:
+            return Response(
+                {
+                    "ok": True,
+                    "streak_count": obj.streak_count,
+                    "last_activity_date": obj.last_activity_date.isoformat(),
+                }
+            )
+        if obj.last_activity_date is None:
+            obj.streak_count = 1
+        else:
+            delta = (today - obj.last_activity_date).days
+            if delta == 1:
+                obj.streak_count += 1
+            else:
+                obj.streak_count = 1
+        obj.last_activity_date = today
+        obj.save(update_fields=["streak_count", "last_activity_date", "updated_at"])
+
+    return Response(
+        {
+            "ok": True,
+            "streak_count": obj.streak_count,
+            "last_activity_date": obj.last_activity_date.isoformat(),
+        }
+    )
+
+
+@api_view(["POST"])
+def syndicate_streak_restore(request):
+    """After referral streak restore: set streak on the server and clear break hints in JSON state."""
+    try:
+        n = int(request.data.get("streak_count", 1))
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, min(n, 999))
+    obj, _ = SyndicateUserProgress.objects.get_or_create(
+        user=request.user,
+        defaults={"state": {}, "streak_count": 0, "last_activity_date": None},
+    )
+    cur = dict(obj.state or {})
+    cur.pop("streak_before_break", None)
+    cur.pop("streak_break_date", None)
+    obj.streak_count = n
+    obj.state = cur
+    obj.save(update_fields=["streak_count", "state", "updated_at"])
+    return Response(
+        {
+            "ok": True,
+            "state": obj.state or {},
+            "streak_count": obj.streak_count,
+            "last_activity_date": obj.last_activity_date.isoformat() if obj.last_activity_date else None,
+        }
+    )
 
 
 @api_view(["GET", "POST"])
@@ -72,10 +260,11 @@ def generate_challenges_view(request):
     if not mood:
         return Response({"detail": "mood is required when category is provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-    ok, results, err = generate_challenges(mood, category)
+    device_id = (request.data.get("device_id") or "").strip()
+    ok, results, err = generate_challenges(mood, category, device_id=device_id)
     if not ok:
         detail = err or "Failed"
-        if detail in ("Invalid mood. Use: energetic, happy, sad, tired.", "Invalid category.", "Ingest a document first."):
+        if detail in ("Invalid mood. Use: energetic, happy, tired.", "Invalid category.", "Ingest a document first."):
             code = status.HTTP_400_BAD_REQUEST
         elif detail and "OPENAI_API_KEY" in detail:
             code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -114,14 +303,54 @@ def challenges_recent(request):
 
 
 @api_view(["GET"])
-def challenges_today(_request):
-    """Today's daily batch (40 challenges: 5 categories × 4 moods × 2) or create if missing."""
+def challenges_today(request):
+    """Today's daily batch (system missions per user) plus custom missions."""
+    _prune_old_challenge_rows()
     if not MindsetKnowledge.objects.exists():
         return Response({"results": [], "detail": "No mindsets loaded yet."})
-    ok, rows, err = ensure_daily_challenges(force_regenerate=False)
+    device_id = _user_device_key(request)
+    if device_id:
+        ok, rows, err = ensure_daily_challenges_for_device(device_id, force_regenerate=False)
+    else:
+        ok, rows, err = ensure_daily_challenges(force_regenerate=False)
     if not ok:
         return Response({"results": [], "detail": err or "Failed"}, status=status.HTTP_502_BAD_GATEWAY)
+    if device_id:
+        today = timezone.localdate()
+        extras = GeneratedChallenge.objects.filter(challenge_date=today, creator_device=device_id).order_by("slot", "id")
+        rows = list(rows) + [serialize_challenge_row(c) for c in extras]
     return Response({"results": rows})
+
+
+@api_view(["POST"])
+def challenges_user_custom(request):
+    """
+    Create a user task for today (max 2 per device per day).
+    Body: { device_id, title, difficulty: easy|medium|hard }.
+    Points are random 0–9; agent fills description, examples, benefits; mindset summary is updated for this device.
+    """
+    if not MindsetKnowledge.objects.exists():
+        return Response({"detail": "Ingest a document first."}, status=status.HTTP_400_BAD_REQUEST)
+    device_id = _user_device_key(request)
+    title = (request.data.get("title") or "").strip()
+    difficulty = (request.data.get("difficulty") or "").strip()
+    ok, row, err = create_user_custom_challenge(device_id, title, difficulty)
+    if not ok:
+        detail = err or "Failed"
+        if detail in (
+            "device_id required",
+            "Title must be 3–220 characters.",
+            "difficulty must be easy, medium, or hard.",
+            "Maximum 2 custom missions per calendar day.",
+            "Ingest a document first.",
+        ):
+            code = status.HTTP_400_BAD_REQUEST
+        elif detail and "OPENAI_API_KEY" in detail:
+            code = status.HTTP_503_SERVICE_UNAVAILABLE
+        else:
+            code = status.HTTP_502_BAD_GATEWAY
+        return Response({"detail": detail}, status=code)
+    return Response({"result": row})
 
 
 @api_view(["POST"])
@@ -130,7 +359,8 @@ def challenges_generate_pair(request):
     if not MindsetKnowledge.objects.exists():
         return Response({"detail": "Ingest a document first."}, status=status.HTTP_400_BAD_REQUEST)
     category = (request.data.get("category") or "").strip().lower()
-    ok, rows, err = ensure_category_pair(category)
+    device_id = _user_device_key(request)
+    ok, rows, err = ensure_category_pair(category, device_batch_device_id=device_id)
     if not ok:
         code = status.HTTP_503_SERVICE_UNAVAILABLE if err and "OPENAI_API_KEY" in (err or "") else status.HTTP_400_BAD_REQUEST
         if err == "Invalid category":
@@ -143,35 +373,59 @@ def challenges_generate_pair(request):
 
 @api_view(["GET"])
 def leaderboard_list(request):
-    """Top 10 by points_total."""
-    qs = LeaderboardEntry.objects.order_by("-points_total", "-updated_at")[:10]
-    return Response(
-        {
-            "results": [
-                {
-                    "rank": i + 1,
-                    "display_name": e.display_name,
-                    "points_total": e.points_total,
-                    "updated_at": e.updated_at.isoformat(),
-                }
-                for i, e in enumerate(qs)
-            ]
-        }
+    """Top 10 registered accounts by points (``device_id`` = ``user:<pk>``)."""
+    User = get_user_model()
+    qs = list(
+        LeaderboardEntry.objects.filter(device_id__startswith="user:")
+        .order_by("-points_total", "-updated_at")[:10]
     )
+    user_ids: list[int] = []
+    for e in qs:
+        m = USER_LEADERBOARD_ID_RE.match(e.device_id)
+        if m:
+            user_ids.append(int(m.group(1)))
+    users_by_id = {u.id: u for u in User.objects.filter(pk__in=user_ids)} if user_ids else {}
+    results = []
+    for i, e in enumerate(qs):
+        m = USER_LEADERBOARD_ID_RE.match(e.device_id)
+        uid = int(m.group(1)) if m else None
+        u = users_by_id.get(uid) if uid is not None else None
+        dn = (e.display_name or "").strip()
+        if u is not None:
+            email = (getattr(u, "email", None) or "").strip()
+            if not dn or dn.lower() == "anonymous":
+                raw = email or (getattr(u, "username", None) or "").strip()
+                dn = raw.split("@")[0] if raw else "Player"
+            seed = quote(f"u{u.id}-{email or u.username}", safe="")
+        else:
+            seed = quote(e.device_id, safe="")
+        avatar_url = f"https://api.dicebear.com/7.x/avataaars/svg?seed={seed}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf"
+        results.append(
+            {
+                "rank": i + 1,
+                "user_id": uid,
+                "display_name": dn[:64] if dn else "Player",
+                "points_total": e.points_total,
+                "updated_at": e.updated_at.isoformat(),
+                "avatar_url": avatar_url,
+            }
+        )
+    return Response({"results": results})
 
 
 @api_view(["POST"])
 def leaderboard_sync(request):
-    """Upsert this device's score for the public leaderboard."""
-    device = (request.data.get("device_id") or "").strip()
-    if not device:
-        return Response({"detail": "device_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    """Upsert this account's score for the leaderboard (one row per authenticated user)."""
+    device = _user_device_key(request)
     try:
         pts = int(request.data.get("points_total", 0))
     except (TypeError, ValueError):
         pts = 0
     pts = max(0, min(pts, 2_000_000_000))
-    name = (request.data.get("display_name") or "").strip() or "Anonymous"
+    name = (request.data.get("display_name") or "").strip()
+    if not name or name.lower() == "anonymous":
+        raw = (getattr(request.user, "email", None) or getattr(request.user, "username", None) or "").strip()
+        name = raw.split("@")[0] if raw else "Anonymous"
     if len(name) > 64:
         name = name[:64]
     obj, _created = LeaderboardEntry.objects.update_or_create(
@@ -189,11 +443,15 @@ def leaderboard_sync(request):
 
 @api_view(["POST"])
 def challenges_generate_daily(request):
-    """Regenerate today's 40 challenges (5 categories × 4 moods × 2). Body: { force: true } to replace existing."""
+    """Regenerate today's system batch (5 categories × 3 moods × 2). Body: { force: true, device_id?: string }."""
     if not MindsetKnowledge.objects.exists():
         return Response({"detail": "Ingest a document first."}, status=status.HTTP_400_BAD_REQUEST)
     force = bool(request.data.get("force", False))
-    ok, rows, err = ensure_daily_challenges(force_regenerate=force)
+    device_id = _user_device_key(request)
+    if device_id:
+        ok, rows, err = ensure_daily_challenges_for_device(device_id, force_regenerate=force)
+    else:
+        ok, rows, err = ensure_daily_challenges(force_regenerate=force)
     if not ok:
         code = status.HTTP_503_SERVICE_UNAVAILABLE if err and "OPENAI_API_KEY" in (err or "") else status.HTTP_502_BAD_GATEWAY
         return Response({"detail": err}, status=code)
@@ -201,11 +459,44 @@ def challenges_generate_daily(request):
 
 
 @api_view(["POST"])
+def mission_score_response(request):
+    """
+    Score a mission response text using deterministic rubric:
+    time spent, word count, repetition penalty, syndicate bonus, title relevance.
+    """
+    response_text = (request.data.get("response_text") or "").strip()
+    title = (request.data.get("challenge_title") or "").strip()
+    difficulty = (request.data.get("difficulty") or "").strip().lower()
+    try:
+        max_points = int(request.data.get("max_points", 0))
+    except (TypeError, ValueError):
+        max_points = 0
+    try:
+        elapsed_seconds = int(request.data.get("elapsed_seconds", 0))
+    except (TypeError, ValueError):
+        elapsed_seconds = 0
+
+    if not response_text:
+        return Response({"detail": "response_text is required"}, status=status.HTTP_400_BAD_REQUEST)
+    if not title:
+        return Response({"detail": "challenge_title is required"}, status=status.HTTP_400_BAD_REQUEST)
+    if max_points < 0:
+        max_points = 0
+
+    scored = score_mission_response(
+        title=title,
+        response_text=response_text,
+        elapsed_seconds=max(0, elapsed_seconds),
+        max_points=max_points,
+        difficulty=difficulty or "medium",
+    )
+    return Response(scored)
+
+
+@api_view(["POST"])
 def referral_create(request):
     """Create a unique invite code (valid 7 days) for streak restore."""
-    device = (request.data.get("device_id") or "").strip()
-    if not device:
-        return Response({"detail": "device_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    device = _user_device_key(request)
     now = timezone.now()
     ReferralRestore.objects.filter(creator_device=device, redeemed=False, expires_at__gte=now).delete()
     code = f"SYN-{secrets.token_hex(5).upper()}"
@@ -218,9 +509,9 @@ def referral_create(request):
 def referral_redeem(request):
     """Friend redeems a code (cannot be your own)."""
     code = (request.data.get("code") or "").strip().upper()
-    device = (request.data.get("device_id") or "").strip()
-    if not code or not device:
-        return Response({"detail": "code and device_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    device = _user_device_key(request)
+    if not code:
+        return Response({"detail": "code required"}, status=status.HTTP_400_BAD_REQUEST)
     now = timezone.now()
     try:
         r = ReferralRestore.objects.get(code=code)
@@ -241,9 +532,7 @@ def referral_redeem(request):
 @api_view(["GET"])
 def referral_status(request):
     """Inviter: check if a friend redeemed so you can claim streak restore."""
-    device = (request.GET.get("device_id") or "").strip()
-    if not device:
-        return Response({"detail": "device_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    device = _user_device_key(request)
     now = timezone.now()
     r = (
         ReferralRestore.objects.filter(
@@ -261,9 +550,7 @@ def referral_status(request):
 @api_view(["POST"])
 def referral_claim(request):
     """Inviter: consume one pending restore after friend redeemed."""
-    device = (request.data.get("device_id") or "").strip()
-    if not device:
-        return Response({"detail": "device_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    device = _user_device_key(request)
     now = timezone.now()
     r = (
         ReferralRestore.objects.filter(
@@ -280,3 +567,136 @@ def referral_claim(request):
     r.restore_claimed = True
     r.save()
     return Response({"ok": True})
+
+
+@api_view(["GET"])
+def admin_tasks_active(request):
+    """List active admin-created tasks with this device's submission status."""
+    device = _user_device_key(request)
+    now = timezone.now()
+    window_start = now - timedelta(hours=ADMIN_TASK_VISIBILITY_HOURS)
+    tasks = list(
+        AdminAssignedTask.objects.filter(active=True, created_at__gte=window_start).order_by("-created_at")
+    )
+    task_ids = [t.id for t in tasks]
+    subs = {
+        s.task_id: s
+        for s in AdminTaskSubmission.objects.filter(device_id=device, task_id__in=task_ids)
+    }
+    rows = []
+    for t in tasks:
+        s = subs.get(t.id)
+        expires_at = t.created_at + timedelta(hours=ADMIN_TASK_VISIBILITY_HOURS)
+        rows.append(
+            {
+                "id": t.id,
+                "title": t.title,
+                "description": t.description,
+                "points_target": t.points_target,
+                "image_url": t.image_url,
+                "active": t.active,
+                "created_at": t.created_at.isoformat(),
+                "expires_at": expires_at.isoformat(),
+                "submission": (
+                    {
+                        "status": s.status,
+                        "awarded_points": s.awarded_points,
+                        "points_claimed": s.points_claimed,
+                        "submitted_at": s.submitted_at.isoformat(),
+                        "elapsed_seconds": int(s.elapsed_seconds or 0),
+                        "review_notes": s.review_notes or "",
+                        "reviewed_at": s.reviewed_at.isoformat() if s.reviewed_at else None,
+                        "has_attachment": bool(s.attachment),
+                    }
+                    if s
+                    else None
+                ),
+            }
+        )
+    return Response({"results": rows})
+
+
+@api_view(["POST"])
+def admin_task_submit(request):
+    """Create one device submission for an admin-assigned task (JSON or multipart for optional file)."""
+    device = _user_device_key(request)
+    try:
+        task_id = int(request.data.get("task_id"))
+    except (TypeError, ValueError):
+        return Response({"detail": "task_id required"}, status=status.HTTP_400_BAD_REQUEST)
+    response_text = (request.data.get("response_text") or "").strip()
+    if len(response_text) < 3:
+        return Response({"detail": "response_text too short"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        task = AdminAssignedTask.objects.get(id=task_id, active=True)
+    except AdminAssignedTask.DoesNotExist:
+        return Response({"detail": "Task not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    now = timezone.now()
+    if task.created_at + timedelta(hours=ADMIN_TASK_VISIBILITY_HOURS) < now:
+        return Response({"detail": "This task is no longer available."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if AdminTaskSubmission.objects.filter(task=task, device_id=device).exists():
+        return Response({"detail": "Task already submitted by this device."}, status=status.HTTP_400_BAD_REQUEST)
+
+    upload = request.FILES.get("attachment")
+    if upload is not None and getattr(upload, "size", 0) == 0:
+        upload = None
+    if upload is not None:
+        if upload.size > ADMIN_TASK_MAX_ATTACHMENT_BYTES:
+            return Response({"detail": "Attachment too large (max 5MB)."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Authoritative duration: from when the admin posted the bonus until this submit (server clock).
+    elapsed_from_challenge_start = max(0, int((now - task.created_at).total_seconds()))
+
+    started_at = None
+    started_at_ms = request.data.get("started_at_ms")
+    try:
+        if started_at_ms is not None:
+            ms = int(started_at_ms)
+            if ms > 0:
+                candidate = datetime.fromtimestamp(ms / 1000.0, tz=timezone.get_current_timezone())
+                # Optional: when the client says the user began the task (can diverge from server time).
+                if candidate <= now:
+                    started_at = candidate
+    except Exception:
+        started_at = None
+
+    s = AdminTaskSubmission.objects.create(
+        task=task,
+        device_id=device,
+        response_text=response_text,
+        attachment=upload if upload else None,
+        started_at=started_at,
+        elapsed_seconds=elapsed_from_challenge_start,
+        status=AdminTaskSubmission.STATUS_PENDING,
+    )
+    return Response(
+        {
+            "ok": True,
+            "submission_id": s.id,
+            "status": s.status,
+            "submitted_at": s.submitted_at.isoformat(),
+            "message": "Saved. We will analyze your response and award points later.",
+        }
+    )
+
+
+@api_view(["POST"])
+def admin_task_claim_points(request):
+    """Claim reviewed admin-task points for this device (one-time)."""
+    device = _user_device_key(request)
+    qs = AdminTaskSubmission.objects.filter(
+        device_id=device,
+        status=AdminTaskSubmission.STATUS_REVIEWED,
+        points_claimed=False,
+        awarded_points__gt=0,
+    ).order_by("id")
+    total = 0
+    ids = []
+    for s in qs:
+        total += int(s.awarded_points or 0)
+        ids.append(s.id)
+    if ids:
+        qs.update(points_claimed=True)
+    return Response({"ok": True, "points_awarded": total, "submission_ids": ids})

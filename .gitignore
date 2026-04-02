@@ -20,6 +20,9 @@ out/
 Backend/data/uploads/*
 !Backend/data/uploads/.gitkeep
 
+# Django user uploads (admin attachments, etc.)
+Backend/media/
+
 # IDE / OS
 .idea/
 .vscode/

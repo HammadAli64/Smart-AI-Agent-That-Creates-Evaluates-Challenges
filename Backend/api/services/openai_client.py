@@ -218,16 +218,14 @@ def generate_daily_challenges_batch(
     raise last_err or RuntimeError("Daily batch generation failed")
 
 
-_DAILY_CATEGORY_MOODS_MAX_TOKENS = 12000
+_DAILY_CATEGORY_MOODS_MAX_TOKENS = 9000
 
-# Fixed order for 8 challenges per category: 4 moods × 2 slots.
+# Fixed order for 6 challenges per category: 3 moods × 2 slots (no sad).
 _MOOD_SLOT_ORDER: list[tuple[str, int]] = [
     ("energetic", 1),
     ("energetic", 2),
     ("happy", 1),
     ("happy", 2),
-    ("sad", 1),
-    ("sad", 2),
     ("tired", 1),
     ("tired", 2),
 ]
@@ -237,8 +235,10 @@ def generate_daily_category_moods_batch(
     mindsets_payload: dict[str, Any],
     avoid_titles: list[str],
     category: str,
+    *,
+    personalization: str = "",
 ) -> list[dict[str, Any]]:
-    """Returns 8 challenge dicts for one category: each of energetic/happy/sad/tired with slots 1–2."""
+    """Returns 6 challenge dicts for one category: energetic/happy/tired × slots 1–2."""
     from .prompts import daily_category_moods_system_prompt
 
     cat = (category or "").lower().strip()
@@ -246,11 +246,14 @@ def generate_daily_category_moods_batch(
         raise ValueError("Invalid category")
 
     system = daily_category_moods_system_prompt(cat)
+    user_payload: dict[str, Any] = {
+        "stored_mindsets": mindsets_payload,
+        "titles_to_avoid": avoid_titles[:200],
+    }
+    if (personalization or "").strip():
+        user_payload["user_personalization"] = (personalization or "").strip()[:2500]
     user = json.dumps(
-        {
-            "stored_mindsets": mindsets_payload,
-            "titles_to_avoid": avoid_titles[:200],
-        },
+        user_payload,
         ensure_ascii=False,
     )
 
@@ -260,8 +263,8 @@ def generate_daily_category_moods_batch(
         try:
             data = chat_json(system, user, max_tokens=_DAILY_CATEGORY_MOODS_MAX_TOKENS, temperature=temp)
             challenges = data.get("challenges") or []
-            if len(challenges) != 8:
-                raise ValueError(f"Expected 8 challenges for category {cat}, got {len(challenges)}")
+            if len(challenges) != 6:
+                raise ValueError(f"Expected 6 challenges for category {cat}, got {len(challenges)}")
 
             normalized: list[dict[str, Any]] = []
             for i, ch in enumerate(challenges):
@@ -370,6 +373,7 @@ def generate_mood_category_challenges_batch(
     category: str,
     mood_behavior_instruction: str,
     avoid_titles: list[str],
+    user_mindset_summary: str = "",
 ) -> list[dict[str, Any]]:
     """Returns exactly 2 dicts with keys title, description, mood, category."""
     from .prompts import MOOD_CATEGORY_SYSTEM
@@ -382,10 +386,13 @@ def generate_mood_category_challenges_batch(
         mood_behavior=mood_behavior_instruction,
     )
     avoid = "\n".join(f"- {t}" for t in avoid_titles[:40]) if avoid_titles else "(none)"
+    hints = (user_mindset_summary or "").strip()[:900]
     user = json.dumps(
         {
             "stored_mindsets": mindsets_payload,
             "recent_challenge_titles_to_avoid": avoid,
+            "user_mindset_hints": hints,
+            "instruction": "If user_mindset_hints is non-empty, bias both challenges toward that user's themes and language while staying on mood and category.",
         },
         ensure_ascii=False,
     )
@@ -406,6 +413,88 @@ def generate_mood_category_challenges_batch(
             }
         )
     return out
+
+
+def enrich_user_custom_challenge_payload(
+    mindsets_payload: dict[str, Any],
+    title: str,
+    difficulty: str,
+    user_mindset_summary: str,
+) -> dict[str, Any]:
+    """Expand user title + difficulty into full challenge fields (title preserved exactly)."""
+    from .prompts import USER_CUSTOM_CHALLENGE_EXPAND_SYSTEM
+
+    t = (title or "").strip()
+    if len(t) < 3:
+        raise ValueError("Title too short")
+    diff = (difficulty or "medium").lower().strip()
+    if diff not in ("easy", "medium", "hard"):
+        diff = "medium"
+
+    user = json.dumps(
+        {
+            "stored_mindsets": mindsets_payload,
+            "user_title": t,
+            "chosen_difficulty": diff,
+            "existing_user_mindset_summary": (user_mindset_summary or "").strip(),
+        },
+        ensure_ascii=False,
+    )
+    data = chat_json(USER_CUSTOM_CHALLENGE_EXPAND_SYSTEM, user, max_tokens=3600, temperature=0.72)
+
+    merged: dict[str, Any] = {
+        "challenge_title": t,
+        "challenge_description": str(data.get("challenge_description") or "").strip(),
+        "example_tasks": data.get("example_tasks"),
+        "benefits_list": data.get("benefits_list"),
+        "based_on_mindset": str(data.get("based_on_mindset") or "").strip(),
+        "suitable_moods": data.get("suitable_moods"),
+        "difficulty": diff,
+        "category": "personal",
+    }
+    ch = normalize_challenge_payload(merged)
+    ch["challenge_title"] = t
+    ch["difficulty"] = diff
+    ch["category"] = "personal"
+    sm = ch.get("suitable_moods")
+    if not isinstance(sm, list) or not sm:
+        ch["suitable_moods"] = ["custom", "energetic"]
+    else:
+        sm2 = [str(x).strip() for x in sm if str(x).strip()]
+        if "custom" not in [x.lower() for x in sm2]:
+            ch["suitable_moods"] = ["custom"] + sm2[:4]
+        else:
+            ch["suitable_moods"] = sm2[:6]
+    if len(ch.get("challenge_description") or "") < 40:
+        raise ValueError("Challenge description too short")
+    return ch
+
+
+def merge_user_device_mindset_summary(
+    previous: str,
+    title: str,
+    difficulty: str,
+    one_line_focus: str,
+) -> str:
+    """Update rolling device summary after a new user-created task."""
+    from .prompts import USER_DEVICE_MINDSET_MERGE_SYSTEM
+
+    user = json.dumps(
+        {
+            "previous_summary": (previous or "").strip(),
+            "new_task": {
+                "title": (title or "").strip(),
+                "difficulty": (difficulty or "").strip(),
+                "one_sentence_focus": (one_line_focus or "").strip(),
+            },
+        },
+        ensure_ascii=False,
+    )
+    data = chat_json(USER_DEVICE_MINDSET_MERGE_SYSTEM, user, max_tokens=600, temperature=0.45)
+    s = str(data.get("summary") or "").strip()
+    if len(s) > 1200:
+        s = s[:1197] + "..."
+    return s
 
 
 def generate_agent_daily_quote(

@@ -59,6 +59,12 @@ html {
   color-scheme: dark;
 }
 
+@media (max-width: 640px) {
+  html {
+    font-size: 17px;
+  }
+}
+
 /* Syndicate: native <select> — dark surfaces, readable <option> text; variants use different tints. */
 .syndicate-select {
   color-scheme: dark;
