@@ -1,0 +1,6 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "gunicorn syndicate_backend.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120"
+releaseCommand = "python manage.py migrate --noinput && python manage.py collectstatic --noinput"

@@ -35,13 +35,30 @@ else:
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "django-insecure-whr8w($+2y))zuz-azy2gr3897!ypihga1tzm$k06%m0&gaf-m")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+_default_debug = "false" if (os.environ.get("RAILWAY_ENVIRONMENT") or "").strip() else "true"
+DEBUG = os.environ.get("DJANGO_DEBUG", _default_debug).strip().lower() in ("1", "true", "yes")
 
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+_allowed = ["localhost", "127.0.0.1"]
+for _h in (os.environ.get("ALLOWED_HOSTS") or "").split(","):
+    _h = _h.strip()
+    if _h and _h not in _allowed:
+        _allowed.append(_h)
+_railway_host = (os.environ.get("RAILWAY_PUBLIC_DOMAIN") or "").strip()
+if _railway_host and _railway_host not in _allowed:
+    _allowed.append(_railway_host)
+ALLOWED_HOSTS = _allowed
 
 OPENAI_API_KEY = (os.environ.get("OPENAI_API_KEY") or "").strip().strip("\ufeff")
 OPENAI_MODEL = (os.environ.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
 
+USE_CLOUDINARY = bool(
+    (os.environ.get("CLOUDINARY_URL") or "").strip()
+    or (
+        (os.environ.get("CLOUDINARY_CLOUD_NAME") or "").strip()
+        and (os.environ.get("CLOUDINARY_API_KEY") or "").strip()
+        and (os.environ.get("CLOUDINARY_API_SECRET") or "").strip()
+    )
+)
 
 # Source docs + uploads (place files here or upload via API)
 SYNDICATE_DATA_DIR = BASE_DIR / "data"
@@ -50,22 +67,34 @@ SYNDICATE_MAX_DOC_CHARS = 120_000
 
 # Application definition
 
-INSTALLED_APPS = [
+_django_contrib = [
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',
-    'rest_framework.authtoken',
-    'corsheaders',
-    'api',
-    'apps.challenges.apps.ChallengesConfig',
 ]
+
+INSTALLED_APPS = []
+if USE_CLOUDINARY:
+    INSTALLED_APPS.append('cloudinary_storage')
+INSTALLED_APPS.extend(_django_contrib)
+if USE_CLOUDINARY:
+    INSTALLED_APPS.append('cloudinary')
+INSTALLED_APPS.extend(
+    [
+        'rest_framework',
+        'rest_framework.authtoken',
+        'corsheaders',
+        'api',
+        'apps.challenges.apps.ChallengesConfig',
+    ]
+)
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -110,6 +139,14 @@ DATABASES = {
     }
 }
 
+if (os.environ.get("DATABASE_URL") or "").strip():
+    import dj_database_url
+
+    DATABASES["default"] = dj_database_url.config(
+        conn_max_age=600,
+        ssl_require=True,
+    )
+
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
@@ -145,20 +182,50 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
-
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": (
+            "django.contrib.staticfiles.storage.StaticFilesStorage"
+            if DEBUG
+            else "whitenoise.storage.CompressedManifestStaticFilesStorage"
+        ),
+    },
+}
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+if USE_CLOUDINARY:
+    STORAGES["default"] = {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+    }
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+_cors_env = (os.environ.get("CORS_ALLOWED_ORIGINS") or "").strip()
+if _cors_env:
+    CORS_ALLOWED_ORIGINS = [x.strip() for x in _cors_env.split(",") if x.strip()]
+else:
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+_csrf_env = (os.environ.get("CSRF_TRUSTED_ORIGINS") or "").strip()
+if _csrf_env:
+    CSRF_TRUSTED_ORIGINS = [x.strip() for x in _csrf_env.split(",") if x.strip()]
+else:
+    CSRF_TRUSTED_ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -168,10 +235,11 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
 }
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # Python 3.14+: Django 4.2's BaseContext.__copy__ used copy(super()), which breaks
 # because super() is copyable in 3.14+ (Django #35844; fixed in Django 5.2+).
