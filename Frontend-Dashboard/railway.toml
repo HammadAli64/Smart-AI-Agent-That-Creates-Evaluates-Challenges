@@ -1,3 +1,4 @@
+# Use repo branch that includes latest syndicate auth fixes (e.g. challenges), or merge to your tracked branch.
 [build]
 builder = "NIXPACKS"
 buildCommand = "npm ci && npm run build"

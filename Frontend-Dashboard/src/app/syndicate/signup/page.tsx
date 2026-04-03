@@ -1,3 +1,5 @@
+import { connection } from "next/server";
+
 import { syndicateNextPathFromSearch } from "@/lib/syndicateNextPath";
 
 import { SyndicateSignupForm } from "./signup-form";
@@ -7,6 +9,7 @@ type PageProps = {
 };
 
 export default async function SyndicateSignupPage({ searchParams }: PageProps) {
+  await connection();
   const sp = await searchParams;
   const nextPath = syndicateNextPathFromSearch(sp.next);
   return <SyndicateSignupForm nextPath={nextPath} />;
