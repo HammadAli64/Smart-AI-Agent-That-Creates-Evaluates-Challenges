@@ -45,12 +45,13 @@ def _register_file_from_disk(abs_path: Path) -> UploadedDocument:
 
 
 def run_ingest(doc: UploadedDocument) -> tuple[bool, dict | None, str | None]:
+    """Ingest uses text_extracted when set (inline uploads); otherwise reads from disk under data/."""
+    raw = (doc.text_extracted or "").strip()
     path = _data_path(doc.stored_path)
-    if not path.is_file():
-        return False, None, "Stored file missing"
-
-    raw = doc.text_extracted or extract_text(path)
-    if not doc.text_extracted:
+    if not raw:
+        if not path.is_file():
+            return False, None, "No document text in database and source file is missing from disk."
+        raw = extract_text(path)
         doc.text_extracted = raw
         doc.save(update_fields=["text_extracted"])
 

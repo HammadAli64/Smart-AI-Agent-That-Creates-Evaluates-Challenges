@@ -3,6 +3,7 @@ djangorestframework>=3.14
 django-cors-headers>=4.3
 python-dotenv>=1.0
 openai>=1.40
+# PDF text extraction (PyPDF2 successor; do not add duplicate PyPDF2)
 pypdf>=4.0
 python-docx>=1.1
 gunicorn>=22.0
