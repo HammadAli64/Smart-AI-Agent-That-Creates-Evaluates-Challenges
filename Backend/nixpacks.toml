@@ -1,6 +1,6 @@
 # Railway / Nixpacks: root directory must be Backend (contains this file + requirements.txt).
+# Do not override [phases.install] with bare `pip` — Nixpacks creates /opt/venv first; a custom
+# `pip install` runs before the venv exists and fails with "pip: command not found".
+
 [variables]
 NIXPACKS_PYTHON_VERSION = "3.12"
-
-[phases.install]
-cmds = ["pip install --no-cache-dir -r requirements.txt"]
