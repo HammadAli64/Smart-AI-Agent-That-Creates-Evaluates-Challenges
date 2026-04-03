@@ -3,7 +3,10 @@
  * auth and challenges hit /api/auth/..., /api/challenges/...
  */
 export function getSyndicateApiBase(): string {
-  let u = (process.env.NEXT_PUBLIC_SYNDICATE_API_URL ?? "http://127.0.0.1:8000/api").trim();
+  let u = (process.env.NEXT_PUBLIC_SYNDICATE_API_URL ?? "").trim();
+  if (!u) {
+    u = "http://127.0.0.1:8000/api";
+  }
   u = u.replace(/\/+$/, "");
   if (!u.endsWith("/api")) {
     u = `${u}/api`;
