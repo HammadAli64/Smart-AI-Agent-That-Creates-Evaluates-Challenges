@@ -1,9 +1,15 @@
+import logging
 from pathlib import Path
 
 from django import forms
 from django.contrib import admin, messages
+from django.core.exceptions import PermissionDenied
+from django.http import Http404, HttpResponseRedirect
+from django.urls import reverse
 
 from .models import MindsetKnowledge, UploadedDocument
+
+logger = logging.getLogger(__name__)
 from .services.ingest_async import schedule_ingest_after_commit
 from .services.upload_store import SUPPORTED_SUFFIXES, store_upload_bytes
 from .views import run_ingest
@@ -63,7 +69,13 @@ class UploadedDocumentAddForm(forms.ModelForm):
         if err:
             raise forms.ValidationError(err)
         self._admin_upload_doc = doc
+        # ModelForm._post_clean runs after this; it must see the real row, not an empty shell.
+        self.instance = doc
         return self.cleaned_data
+
+    def _post_clean(self):
+        # Row is already persisted in clean(); skip construct_instance/full_clean on a blank instance.
+        return
 
     def save(self, commit=True):
         doc = getattr(self, "_admin_upload_doc", None)
@@ -79,6 +91,20 @@ class UploadedDocumentAdmin(admin.ModelAdmin):
     list_display = ["id", "original_name", "content_hash", "created_at", "ingested"]
     list_filter = ["created_at"]
     actions = ["ingest_mindsets_action"]
+
+    def add_view(self, request, form_url="", extra_context=None):
+        try:
+            return super().add_view(request, form_url, extra_context)
+        except (Http404, PermissionDenied):
+            raise
+        except Exception as exc:
+            logger.exception("UploadedDocument admin add_view failed")
+            self.message_user(
+                request,
+                f"Upload failed ({type(exc).__name__}: {exc}). See server logs for the full traceback.",
+                level=messages.ERROR,
+            )
+            return HttpResponseRedirect(reverse("admin:api_uploadeddocument_add"))
 
     @admin.display(description="Mindset ingested", boolean=True)
     def ingested(self, obj: UploadedDocument) -> bool:
