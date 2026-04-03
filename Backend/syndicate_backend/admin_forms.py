@@ -8,3 +8,9 @@ class EmailAsUsernameAdminLoginForm(AdminAuthenticationForm):
         label="Email",
         widget=forms.TextInput(attrs={"autocomplete": "email", "autofocus": True}),
     )
+    password = forms.CharField(
+        label="Password",
+        strip=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
+        help_text="Type your password here. Server variables (e.g. DJANGO_SUPERUSER_PASSWORD) do not auto-fill this field.",
+    )

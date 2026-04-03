@@ -8,6 +8,5 @@ python-docx>=1.1
 gunicorn>=22.0
 dj-database-url>=2.2
 psycopg2-binary>=2.9
-whitenoise>=6.7
 django-cloudinary-storage>=0.3
 cloudinary>=1.40

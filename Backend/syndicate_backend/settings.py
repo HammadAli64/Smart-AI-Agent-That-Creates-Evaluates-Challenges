@@ -96,8 +96,6 @@ INSTALLED_APPS.extend(
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    # WhiteNoise before CORS so GET /static/... is served without extra CORS work (fixes missing admin CSS on some hosts).
-    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -216,15 +214,12 @@ USE_TZ = True
 # Leading slash so /admin/ pages load CSS/JS from /static/... (not /admin/static/...).
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-# WhiteNoise warns if this path is missing; release may not have run collectstatic yet.
 STATIC_ROOT.mkdir(parents=True, exist_ok=True)
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
-    # Plain StaticFilesStorage: whitenoise.storage.CompressedStaticFilesStorage can raise
-    # FileNotFoundError during collectstatic (admin select2 i18n paths on Linux). WhiteNoise
-    # middleware still serves STATIC_ROOT and can compress responses at request time.
+    # Plain StaticFilesStorage (collectstatic). Production serves STATIC_ROOT via urls.py, not WhiteNoise.
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
