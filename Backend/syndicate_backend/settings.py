@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 import os
 import sys
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
@@ -127,24 +128,52 @@ WSGI_APPLICATION = 'syndicate_backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
+#
+# Local: SQLite (default). Production / Railway: set DATABASE_URL (Postgres plugin injects it),
+# or set PGHOST + PGPORT + PGUSER + PGPASSWORD + PGDATABASE. Optional DATABASE_PUBLIC_URL
+# is used if DATABASE_URL is empty (some templates expose only the public URL).
+
+
+def _resolved_postgres_url() -> str | None:
+    for key in ("DATABASE_URL", "DATABASE_PRIVATE_URL", "DATABASE_PUBLIC_URL"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            return v
+    host = (os.environ.get("PGHOST") or "").strip()
+    if not host:
+        return None
+    user = quote_plus((os.environ.get("PGUSER") or "").strip())
+    password = quote_plus((os.environ.get("PGPASSWORD") or "").strip())
+    database = (os.environ.get("PGDATABASE") or "").strip()
+    port = (os.environ.get("PGPORT") or "5432").strip()
+    if not database:
+        return None
+    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-        'OPTIONS': {
-            # Reduce transient "database is locked" errors under concurrent API writes.
-            'timeout': 20,
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {
+            "timeout": 20,
         },
     }
 }
 
-if (os.environ.get("DATABASE_URL") or "").strip():
+_pg_url = _resolved_postgres_url()
+if _pg_url:
     import dj_database_url
 
-    DATABASES["default"] = dj_database_url.config(
+    _ssl = (os.environ.get("DATABASE_SSL_REQUIRE") or "true").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    DATABASES["default"] = dj_database_url.parse(
+        _pg_url,
         conn_max_age=600,
-        ssl_require=True,
+        ssl_require=_ssl,
     )
 
 

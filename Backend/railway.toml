@@ -1,3 +1,6 @@
+# Backend service: set Railway "Root Directory" to Backend.
+# Add PostgreSQL to this service — Railway sets DATABASE_URL; run migrate via releaseCommand.
+
 [build]
 builder = "NIXPACKS"
 
