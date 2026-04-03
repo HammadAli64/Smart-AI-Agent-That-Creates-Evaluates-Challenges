@@ -64,7 +64,7 @@ USE_CLOUDINARY = bool(
 
 
 def _s3_object_storage_config() -> dict | None:
-    """S3-compatible object storage (AWS S3, Cloudflare R2, Tigris, Railway Buckets, etc.)."""
+    """S3-*compatible* object storage: Railway Bucket, R2, Tigris, AWS S3, etc. (endpoint chooses the host)."""
     if (os.environ.get("USE_S3_OBJECT_STORAGE") or "").strip().lower() in ("0", "false", "no", "off"):
         return None
     # Railway Buckets: BUCKET, ACCESS_KEY_ID, SECRET_ACCESS_KEY, ENDPOINT, REGION (see railway.com/docs — Storage Buckets).
@@ -285,6 +285,8 @@ STORAGES = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# django-storages/boto3 require these setting names; traffic goes to AWS_S3_ENDPOINT_URL
+# (e.g. Railway Bucket https://storage.railway.app — not necessarily Amazon AWS).
 if USE_S3_OBJECT_STORAGE and _s3_object_storage_cfg:
     AWS_ACCESS_KEY_ID = _s3_object_storage_cfg["access_key"]
     AWS_SECRET_ACCESS_KEY = _s3_object_storage_cfg["secret_key"]
