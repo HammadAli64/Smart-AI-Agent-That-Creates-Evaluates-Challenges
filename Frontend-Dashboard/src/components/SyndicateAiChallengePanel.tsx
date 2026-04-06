@@ -415,7 +415,13 @@ function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
-type SyndicateHelpTopic = "custom-mission" | "hud-points-streak" | "unlock" | "mega-mission";
+type SyndicateHelpTopic =
+  | "custom-mission"
+  | "hud-points"
+  | "hud-streak"
+  | "points-to-pounds"
+  | "unlock"
+  | "mega-mission";
 
 function SyndicateHelpMark({
   topic,
@@ -431,7 +437,7 @@ function SyndicateHelpMark({
       type="button"
       onClick={() => onOpen(topic)}
       aria-label={label}
-      className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-white/40 bg-black/45 text-[12px] font-black leading-none text-white/95 shadow-[0_0_12px_rgba(255,255,255,0.1)] transition hover:border-[rgba(254,222,0,0.55)] hover:text-[#fef08a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(254,222,0,0.45)]"
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-red-500/90 bg-red-950/80 text-[17px] font-black leading-none text-red-400 shadow-[0_0_14px_rgba(239,68,68,0.45)] transition hover:border-red-400 hover:bg-red-900/90 hover:text-red-300 hover:shadow-[0_0_20px_rgba(248,113,113,0.55)] focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/70 sm:h-9 sm:w-9 sm:text-[19px]"
     >
       ?
     </button>
@@ -450,11 +456,15 @@ function SyndicateHelpOverlay({ topic, onClose }: { topic: SyndicateHelpTopic; o
   const title =
     topic === "custom-mission"
       ? "Create your mission"
-      : topic === "hud-points-streak"
-        ? "Points & streak"
-        : topic === "unlock"
-          ? "Unlock & redeem rewards"
-          : "Mega mission";
+      : topic === "hud-points"
+        ? "Points"
+        : topic === "hud-streak"
+          ? "Streak"
+          : topic === "points-to-pounds"
+            ? "Points to pounds"
+            : topic === "unlock"
+              ? "Unlock & redeem rewards"
+              : "Mega mission";
 
   return (
     <div
@@ -492,17 +502,29 @@ function SyndicateHelpOverlay({ topic, onClose }: { topic: SyndicateHelpTopic; o
               </p>
               <p>Finishing a custom mission uses the same daily completion limits as the main mission board.</p>
             </>
-          ) : topic === "hud-points-streak" ? (
+          ) : topic === "hud-points" ? (
             <>
               <p>
-                <strong className="text-sky-100">Level</strong> reflects how many reward tiers your <strong className="text-white">lifetime points</strong> have crossed—the same thresholds you see under Unlock &amp; redeem rewards.
+                <strong className="text-amber-100">Points</strong> are your <strong className="text-white">lifetime total</strong> earned from daily missions, mega-mission payouts when you claim them, and bonus points when you redeem tiers under Unlock &amp; redeem rewards.
               </p>
               <p>
-                <strong className="text-amber-100">Points</strong> are your total earned from missions, bonus mega-mission payouts when claimed, and any bonus from redeeming rewards. Use them to qualify for each unlock tier (and other actions this screen offers, like conversion where shown).
+                That total drives your <strong className="text-white">syndicate level</strong> (same point thresholds as the reward cards). You can spend part of your balance by converting to pounds in the <strong className="text-white">Points to pounds</strong> section—only if you have enough points for the amount you enter.
+              </p>
+            </>
+          ) : topic === "hud-streak" ? (
+            <>
+              <p>
+                <strong className="text-fuchsia-100">Streak</strong> is your <strong className="text-white">run of consecutive calendar days</strong> where you completed at least one qualifying mission. The server tracks your last activity date; starting a new day with a completion extends the count.
+              </p>
+              <p>If you miss a day, the streak can reset to zero. When you are inside the restore window, use <strong className="text-white">Restore streak</strong> on this card (referral invite or redeem a friend&apos;s code) to bring it back, as described in that block.</p>
+            </>
+          ) : topic === "points-to-pounds" ? (
+            <>
+              <p>
+                You can <strong className="text-white">convert mission points into pounds</strong> at the rate on this screen ({POINTS_PER_10_POUNDS} points = £{POUNDS_PER_100_POINTS}). Enter how many points to convert and tap Convert; that amount is <strong className="text-white">deducted from your points total</strong> and the same value in pounds is added to your <strong className="text-white">pounds balance</strong> right away.
               </p>
               <p>
-                <strong className="text-fuchsia-100">Streak</strong> counts <strong className="text-white">consecutive calendar days</strong> with at least one qualifying mission completed. Miss a day and it can reset; if you are in the restore window, use{" "}
-                <strong className="text-white">Restore streak</strong> (referral flow) as described in that section.
+                Use your pounds balance for real value in the product: <strong className="text-white">you can unlock courses with these pounds</strong> (and any other paid unlocks your account offers). Because conversion lowers your points, keep enough points if you are still working toward the next Unlock &amp; redeem tier.
               </p>
             </>
           ) : topic === "unlock" ? (
@@ -2818,15 +2840,7 @@ export function SyndicateAiChallengePanel() {
                 </div>
                 <div className="hidden sm:block" aria-hidden />
               </div>
-              <div className="relative mt-4">
-                <div className="pointer-events-auto absolute right-0 top-0 z-[1] sm:right-1 sm:top-1">
-                  <SyndicateHelpMark
-                    topic="hud-points-streak"
-                    label="How level, points, and streak work"
-                    onOpen={setSyndicateHelpPanel}
-                  />
-                </div>
-                <div className="grid grid-cols-1 items-stretch gap-3 min-[420px]:grid-cols-3">
+              <div className="mt-4 grid grid-cols-1 items-stretch gap-3 min-[420px]:grid-cols-3">
                 <div className="flex min-h-[150px] flex-col border border-sky-300/70 bg-[linear-gradient(135deg,rgba(56,189,248,0.38),rgba(59,130,246,0.28)_45%,rgba(10,20,60,0.92)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_16px_rgba(56,189,248,0.3),inset_0_1px_0_rgba(210,240,255,0.45)] min-[420px]:min-h-[182px] sm:px-3 sm:py-3">
                   <div className={cn(HUD_LABEL, "text-[11px] text-sky-100/90 sm:text-[12px]")}>Level</div>
                   <div className="mt-0.5 text-[28px] font-black tabular-nums leading-none text-sky-50 sm:text-[34px]">
@@ -2861,7 +2875,10 @@ export function SyndicateAiChallengePanel() {
                   </div>
                 </div>
                 <div className="flex min-h-[150px] flex-col border border-amber-300/75 bg-[linear-gradient(135deg,rgba(251,191,36,0.38),rgba(245,158,11,0.3)_45%,rgba(66,32,2,0.92)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_16px_rgba(245,158,11,0.32),inset_0_1px_0_rgba(255,237,170,0.45)] min-[420px]:min-h-[182px]">
-                  <div className={cn(HUD_LABEL, "text-amber-100/85")}>Points</div>
+                  <div className="flex items-center justify-center gap-2">
+                    <div className={cn(HUD_LABEL, "text-amber-100/85")}>Points</div>
+                    <SyndicateHelpMark topic="hud-points" label="How points work" onOpen={setSyndicateHelpPanel} />
+                  </div>
                   <div className="mt-1 text-[22px] font-black tabular-nums text-amber-50 sm:text-[24px]">{pointsTotal}</div>
                   <div className="mt-2 text-[10px] font-bold uppercase tracking-[0.08em] text-amber-200/85 sm:text-[11px]">Total earned</div>
                   <div className="mt-auto flex flex-1 flex-col justify-end pt-2">
@@ -2872,7 +2889,10 @@ export function SyndicateAiChallengePanel() {
                   </div>
                 </div>
                 <div className="flex min-h-[150px] flex-col border border-fuchsia-300/70 bg-[linear-gradient(135deg,rgba(244,114,182,0.36),rgba(168,85,247,0.28)_45%,rgba(48,11,62,0.9)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_16px_rgba(217,70,239,0.28),inset_0_1px_0_rgba(245,208,254,0.4)] min-[420px]:min-h-[182px]">
-                  <div className={cn(HUD_LABEL, "text-fuchsia-100/85")}>Streak 🔥</div>
+                  <div className="flex items-center justify-center gap-2">
+                    <div className={cn(HUD_LABEL, "text-fuchsia-100/85")}>Streak 🔥</div>
+                    <SyndicateHelpMark topic="hud-streak" label="How streak works" onOpen={setSyndicateHelpPanel} />
+                  </div>
                   <div className="mt-1 text-[20px] font-black text-fuchsia-100">🔥 {streak}d</div>
                   <div className="mt-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-fuchsia-200/80">Consecutive days</div>
                   <div className="mt-auto flex flex-1 flex-col justify-end gap-1.5 pt-2">
@@ -2887,7 +2907,6 @@ export function SyndicateAiChallengePanel() {
                       {showRestore ? `Restore streak (${restoreDaysLeftCount}d left)` : "Restore streak"}
                     </button>
                   </div>
-                </div>
                 </div>
               </div>
               <div className="mt-4">
@@ -3375,8 +3394,13 @@ export function SyndicateAiChallengePanel() {
           {!showStatsProfile && syndicateView === "dashboard" ? (
           <section className="syndicate-readable mt-10 w-full min-w-0 border-t border-[rgba(255,215,0,0.28)] px-2 py-6 sm:px-3 sm:py-7">
             <div className="text-center">
-              <h3 className="text-[24px] font-black uppercase tracking-[0.1em] text-[color:var(--gold)] [text-shadow:0_0_22px_rgba(255,215,0,0.18)] sm:text-[28px] md:text-[32px]">
-                Points to pounds
+              <h3 className="flex flex-wrap items-center justify-center gap-3 text-[24px] font-black uppercase tracking-[0.1em] text-[color:var(--gold)] [text-shadow:0_0_22px_rgba(255,215,0,0.18)] sm:text-[28px] md:text-[32px]">
+                <span>Points to pounds</span>
+                <SyndicateHelpMark
+                  topic="points-to-pounds"
+                  label="How points to pounds and course unlocks work"
+                  onOpen={setSyndicateHelpPanel}
+                />
               </h3>
               <div className="mt-1 text-[17px] font-bold tabular-nums text-white/88 sm:mt-2 sm:text-[18px]">
                 Rate: 100 points = 10 pounds
