@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Bar,
   BarChart,
@@ -1514,7 +1515,8 @@ export function SyndicateAiChallengePanel() {
   const adminTaskChunksRef = useRef<Record<number, BlobPart[]>>({});
   /** Wall-clock ms when admin-task recording started (for on-screen duration). */
   const adminTaskRecordingStartMsRef = useRef<Record<number, number>>({});
-  const adminTaskPreviewVideoRef = useRef<Record<number, HTMLVideoElement | null>>({});
+  /** Fullscreen portal preview (avoids iOS clipping from parent overflow; user sees full-screen camera). */
+  const adminTaskFullscreenVideoRef = useRef<HTMLVideoElement | null>(null);
   /** Blocks double `getUserMedia` while the first call is still pending. */
   const adminTaskCameraOpeningRef = useRef<Record<number, boolean>>({});
 
@@ -1699,6 +1701,35 @@ export function SyndicateAiChallengePanel() {
     () => visibleAdminTasks.some((t) => t.submission == null),
     [visibleAdminTasks]
   );
+
+  /** Which bonus task is recording — drives fullscreen camera portal (esp. iOS). */
+  const recordingAdminTaskId = useMemo(() => {
+    for (const [k, v] of Object.entries(adminTaskRecording)) {
+      if (v) return Number(k);
+    }
+    return null;
+  }, [adminTaskRecording]);
+
+  useLayoutEffect(() => {
+    if (recordingAdminTaskId == null) return;
+    const stream = adminTaskStreamRef.current[recordingAdminTaskId];
+    const vid = adminTaskFullscreenVideoRef.current;
+    if (vid && stream) {
+      vid.srcObject = stream;
+      vid.muted = true;
+      vid.setAttribute("playsinline", "");
+      void vid.play().catch(() => null);
+    }
+  }, [recordingAdminTaskId]);
+
+  useEffect(() => {
+    if (recordingAdminTaskId == null) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [recordingAdminTaskId]);
 
   const goToBonusMissions = useCallback(() => {
     setSyndicateView("dashboard");
@@ -2481,10 +2512,8 @@ export function SyndicateAiChallengePanel() {
       };
       rec.onstop = () => {
         delete adminTaskRecordingStartMsRef.current[taskId];
-        const preview = adminTaskPreviewVideoRef.current[taskId];
-        if (preview) {
-          preview.srcObject = null;
-        }
+        const fs = adminTaskFullscreenVideoRef.current;
+        if (fs) fs.srcObject = null;
         const chunks = adminTaskChunksRef.current[taskId] || [];
         const outType = rec.mimeType || mimeType || "video/webm";
         const blob = new Blob(chunks, { type: outType });
@@ -2525,9 +2554,9 @@ export function SyndicateAiChallengePanel() {
         return;
       }
       setAdminTaskRecording((prev) => ({ ...prev, [taskId]: true }));
-      setAdminTaskMsg("Camera is on — you are recording. Use Stop recording when finished.");
+      setAdminTaskMsg("Camera is on — fullscreen preview. Tap Stop recording when finished.");
       requestAnimationFrame(() => {
-        const vid = adminTaskPreviewVideoRef.current[taskId];
+        const vid = adminTaskFullscreenVideoRef.current;
         const s = adminTaskStreamRef.current[taskId];
         if (vid && s) {
           vid.srcObject = s;
@@ -2826,9 +2855,67 @@ export function SyndicateAiChallengePanel() {
       <SyndicateHelpOverlay topic={syndicateHelpPanel} onClose={() => setSyndicateHelpPanel(null)} />
     ) : null;
 
+  const adminTaskRecordingPortal =
+    mounted &&
+    recordingAdminTaskId != null &&
+    typeof document !== "undefined"
+      ? createPortal(
+          <div
+            className="fixed inset-0 z-[2147483646] flex max-h-[100dvh] min-h-0 flex-col bg-black touch-none"
+            style={{ height: "100dvh" }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Live camera recording"
+          >
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-black/80 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+              <span className="inline-flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.14em] text-rose-200">
+                <span
+                  className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-rose-300 shadow-[0_0_10px_rgba(254,205,211,0.9)]"
+                  aria-hidden
+                />
+                Recording
+              </span>
+              <span className="font-mono text-[15px] font-black tabular-nums text-white sm:text-[16px]">
+                {formatDurationReadable(
+                  Math.max(
+                    0,
+                    Math.floor(
+                      (nowTick - (adminTaskRecordingStartMsRef.current[recordingAdminTaskId] ?? nowTick)) / 1000
+                    )
+                  )
+                )}
+              </span>
+            </div>
+            <div className="relative min-h-0 w-full flex-1 bg-black">
+              <video
+                ref={adminTaskFullscreenVideoRef}
+                className="absolute inset-0 h-full w-full object-cover"
+                playsInline
+                muted
+                autoPlay
+              />
+            </div>
+            <div className="shrink-0 border-t border-white/10 bg-black/95 px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <p className="mb-3 text-center text-[14px] leading-snug text-white/88">
+                Recording… camera is live. Stop when you are done. Your written response stays in the form — submit sends text and video together.
+              </p>
+              <button
+                type="button"
+                onClick={() => stopAdminTaskVideoRecord(recordingAdminTaskId)}
+                className="w-full min-h-[52px] rounded-xl border border-rose-300/60 bg-rose-600/30 px-4 py-3.5 text-[15px] font-bold uppercase tracking-[0.12em] text-white shadow-[0_4px_24px_rgba(225,29,72,0.35)] active:bg-rose-600/45"
+              >
+                Stop recording
+              </button>
+            </div>
+          </div>,
+          document.body
+        )
+      : null;
+
   if (selected) {
     return (
       <>
+        {adminTaskRecordingPortal}
         {completionToast}
         {syndicateHelpModal}
         <DetailPane
@@ -2854,6 +2941,7 @@ export function SyndicateAiChallengePanel() {
 
   return (
     <>
+      {adminTaskRecordingPortal}
       {completionToast}
       {syndicateHelpModal}
       <div className="syndicate-dash-outer relative mx-auto w-full min-w-0 max-w-[min(100%,100rem)] space-y-5 border px-0 py-3 sm:py-5 max-md:space-y-4 max-md:border-0 max-md:bg-[linear-gradient(168deg,#050508_0%,#0d0818_44%,#0a0610_100%)] max-md:px-0 max-md:pb-3 max-md:pt-0 max-md:shadow-none">
@@ -3942,59 +4030,24 @@ export function SyndicateAiChallengePanel() {
                                     </button>
                                   )}
                                   {isRecording ? (
-                                    <span className="inline-flex items-center gap-2 rounded-lg border border-rose-400/50 bg-rose-600/25 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.1em] text-rose-50">
-                                      <span
-                                        className="inline-block h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-rose-300 shadow-[0_0_10px_rgba(254,205,211,0.9)]"
-                                        aria-hidden
-                                      />
-                                      Recording
+                                    <span className="inline-flex max-w-full flex-col gap-0.5 sm:inline-flex sm:flex-row sm:items-center sm:gap-2">
+                                      <span className="inline-flex items-center gap-2 rounded-lg border border-rose-400/50 bg-rose-600/25 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.1em] text-rose-50">
+                                        <span
+                                          className="inline-block h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-rose-300 shadow-[0_0_10px_rgba(254,205,211,0.9)]"
+                                          aria-hidden
+                                        />
+                                        Recording
+                                      </span>
+                                      <span className="text-[11px] font-medium leading-snug text-cyan-100/90">
+                                        Fullscreen camera is open — use Stop below or in the bar above the form.
+                                      </span>
                                     </span>
                                   ) : null}
                                 </div>
                                 {isRecording ? (
-                                  <div className="relative mt-3 overflow-hidden rounded-xl border-2 border-rose-500/70 bg-black shadow-[0_0_0_1px_rgba(244,63,94,0.35),0_8px_32px_rgba(0,0,0,0.55)] ring-2 ring-rose-500/25">
-                                    <div className="absolute left-2 top-2 z-10 flex flex-wrap items-center gap-2">
-                                      <span className="inline-flex items-center gap-1.5 rounded-md bg-rose-600/95 px-2 py-1 font-mono text-[11px] font-black tabular-nums uppercase tracking-wide text-white shadow-md">
-                                        <span
-                                          className="inline-block h-2 w-2 animate-pulse rounded-full bg-white"
-                                          aria-hidden
-                                        />
-                                        Rec ·{" "}
-                                        {formatDurationReadable(
-                                          Math.max(
-                                            0,
-                                            Math.floor(
-                                              (nowTick - (adminTaskRecordingStartMsRef.current[t.id] ?? nowTick)) / 1000
-                                            )
-                                          )
-                                        )}
-                                      </span>
-                                    </div>
-                                    <video
-                                      ref={(el) => {
-                                        adminTaskPreviewVideoRef.current[t.id] = el;
-                                        if (!el) return;
-                                        if (isRecording) {
-                                          const s = adminTaskStreamRef.current[t.id];
-                                          if (s) {
-                                            el.srcObject = s;
-                                            el.muted = true;
-                                            void el.play().catch(() => null);
-                                          }
-                                        } else {
-                                          el.srcObject = null;
-                                        }
-                                      }}
-                                      className="aspect-video max-h-[min(50vh,22rem)] w-full bg-black object-cover"
-                                      playsInline
-                                      muted
-                                      autoPlay
-                                    />
-                                    <p className="border-t border-white/10 bg-black/75 px-3 py-2 text-center text-[12px] font-semibold leading-snug text-white/90">
-                                      Live camera — your video is recording now. Tap{" "}
-                                      <span className="text-rose-200">Stop recording</span> when done.
-                                    </p>
-                                  </div>
+                                  <p className="mt-2 text-[12px] leading-snug text-cyan-200/85">
+                                    The live preview uses the full screen so you can see yourself clearly (especially on iPhone). Scroll is locked until you stop.
+                                  </p>
                                 ) : null}
                                 {fileName ? (
                                   <p className="mt-2 text-[12px] text-cyan-200/90">Selected: {fileName}</p>
