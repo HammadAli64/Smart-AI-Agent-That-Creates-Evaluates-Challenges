@@ -1520,6 +1520,28 @@ export function SyndicateAiChallengePanel() {
   /** Blocks double `getUserMedia` while the first call is still pending. */
   const adminTaskCameraOpeningRef = useRef<Record<number, boolean>>({});
 
+  /** iOS Safari often needs playsinline attrs + repeated play(); keep preview visible. */
+  const bindFullscreenCameraStream = useCallback((stream: MediaStream) => {
+    const vid = adminTaskFullscreenVideoRef.current;
+    if (!vid) return;
+    vid.srcObject = stream;
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.setAttribute("playsinline", "");
+    vid.setAttribute("webkit-playsinline", "");
+    const tryPlay = () => {
+      void vid.play().catch(() => null);
+    };
+    tryPlay();
+    requestAnimationFrame(tryPlay);
+    requestAnimationFrame(() => requestAnimationFrame(tryPlay));
+    if (typeof window !== "undefined") {
+      window.setTimeout(tryPlay, 0);
+      window.setTimeout(tryPlay, 80);
+      window.setTimeout(tryPlay, 250);
+    }
+  }, []);
+
   const handleSyndicateLogout = useCallback(() => {
     void fetch(`${API_BASE}/auth/logout/`, {
       method: "POST",
@@ -1713,14 +1735,8 @@ export function SyndicateAiChallengePanel() {
   useLayoutEffect(() => {
     if (recordingAdminTaskId == null) return;
     const stream = adminTaskStreamRef.current[recordingAdminTaskId];
-    const vid = adminTaskFullscreenVideoRef.current;
-    if (vid && stream) {
-      vid.srcObject = stream;
-      vid.muted = true;
-      vid.setAttribute("playsinline", "");
-      void vid.play().catch(() => null);
-    }
-  }, [recordingAdminTaskId]);
+    if (stream) bindFullscreenCameraStream(stream);
+  }, [recordingAdminTaskId, bindFullscreenCameraStream]);
 
   useEffect(() => {
     if (recordingAdminTaskId == null) return;
@@ -2556,13 +2572,8 @@ export function SyndicateAiChallengePanel() {
       setAdminTaskRecording((prev) => ({ ...prev, [taskId]: true }));
       setAdminTaskMsg("Camera is on — fullscreen preview. Tap Stop recording when finished.");
       requestAnimationFrame(() => {
-        const vid = adminTaskFullscreenVideoRef.current;
         const s = adminTaskStreamRef.current[taskId];
-        if (vid && s) {
-          vid.srcObject = s;
-          vid.muted = true;
-          void vid.play().catch(() => null);
-        }
+        if (s) bindFullscreenCameraStream(s);
       });
     } catch (e) {
       const name = e && typeof e === "object" && "name" in e ? String((e as DOMException).name) : "";
@@ -2856,18 +2867,24 @@ export function SyndicateAiChallengePanel() {
     ) : null;
 
   const adminTaskRecordingPortal =
-    mounted &&
     recordingAdminTaskId != null &&
     typeof document !== "undefined"
       ? createPortal(
           <div
-            className="fixed inset-0 z-[2147483646] flex max-h-[100dvh] min-h-0 flex-col bg-black touch-none"
-            style={{ height: "100dvh" }}
+            className="pointer-events-auto fixed inset-0 z-[2147483646] grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-black touch-none [isolation:isolate]"
+            style={{
+              minHeight: "100dvh",
+              height: "100dvh",
+              width: "100vw",
+              maxHeight: "-webkit-fill-available",
+              paddingTop: "env(safe-area-inset-top)",
+              paddingBottom: "env(safe-area-inset-bottom)"
+            }}
             role="dialog"
             aria-modal="true"
             aria-label="Live camera recording"
           >
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-black/80 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-black/80 px-4 py-3">
               <span className="inline-flex items-center gap-2 text-[12px] font-bold uppercase tracking-[0.14em] text-rose-200">
                 <span
                   className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-rose-300 shadow-[0_0_10px_rgba(254,205,211,0.9)]"
@@ -2886,18 +2903,18 @@ export function SyndicateAiChallengePanel() {
                 )}
               </span>
             </div>
-            <div className="relative min-h-0 w-full flex-1 bg-black">
+            <div className="relative min-h-0 w-full min-w-0 overflow-hidden bg-black">
               <video
                 ref={adminTaskFullscreenVideoRef}
-                className="absolute inset-0 h-full w-full object-cover"
+                className="absolute inset-0 z-0 h-full min-h-[40vh] w-full object-cover [transform:translateZ(0)]"
                 playsInline
                 muted
                 autoPlay
               />
             </div>
-            <div className="shrink-0 border-t border-white/10 bg-black/95 px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div className="shrink-0 border-t border-white/10 bg-black/95 px-4 py-4">
               <p className="mb-3 text-center text-[14px] leading-snug text-white/88">
-                Recording… camera is live. Stop when you are done. Your written response stays in the form — submit sends text and video together.
+                You should see yourself above in real time. Stop when finished — your written response stays in the form; submit sends text and video together.
               </p>
               <button
                 type="button"
