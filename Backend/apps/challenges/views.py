@@ -97,6 +97,7 @@ SYNDICATE_ALLOWED_STATE_KEYS = frozenset(
         "streak_break_date",
         "display_name",
         "profile_image_url",
+        "mission_reminders_v1",
     }
 )
 

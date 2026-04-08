@@ -443,6 +443,15 @@ function calendarIsoFromRows(rows: ChallengeRow[]): string {
   return String(cd).slice(0, 10);
 }
 
+/** Missions leave the main board after this TTL from `created_at`; reminders stay until their target time. */
+const MISSION_BOARD_TTL_MS = 24 * 60 * 60 * 1000;
+
+function rowWithinMissionBoardTtl(row: ChallengeRow, nowMs: number): boolean {
+  const t = Date.parse(row.created_at);
+  if (Number.isNaN(t)) return true;
+  return nowMs - t < MISSION_BOARD_TTL_MS;
+}
+
 function isoDateAddDays(iso: string, delta: number): string {
   const d = new Date(iso + "T12:00:00");
   d.setDate(d.getDate() + delta);
@@ -634,6 +643,56 @@ function todayLocalISO(): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** `datetime-local` value from a Date in the user's local timezone. */
+function toDatetimeLocalValue(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}`;
+}
+
+type MissionReminderEntry = {
+  atIso: string;
+  title: string;
+  penaltyApplied?: boolean;
+  /** ISO instant when the mission row was created (24h board window). */
+  missionCreatedAtIso?: string;
+};
+
+function loadMissionReminders(): Record<number, MissionReminderEntry> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(ls("mission_reminders_v1"));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<number, MissionReminderEntry> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      const id = parseInt(k, 10);
+      if (!Number.isFinite(id) || !v || typeof v !== "object" || Array.isArray(v)) continue;
+      const o = v as Record<string, unknown>;
+      const atIso = typeof o.atIso === "string" ? o.atIso : "";
+      const title = typeof o.title === "string" ? o.title : "Mission";
+      if (!atIso || Number.isNaN(Date.parse(atIso))) continue;
+      const penaltyApplied = o.penaltyApplied === true;
+      const missionCreatedAtIso = typeof o.missionCreatedAtIso === "string" ? o.missionCreatedAtIso : undefined;
+      out[id] = { atIso, title, penaltyApplied, ...(missionCreatedAtIso ? { missionCreatedAtIso } : {}) };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistMissionReminders(m: Record<number, MissionReminderEntry>) {
+  if (typeof window === "undefined") return;
+  const obj: Record<string, MissionReminderEntry> = {};
+  for (const [k, v] of Object.entries(m)) obj[String(k)] = v;
+  window.localStorage.setItem(ls("mission_reminders_v1"), JSON.stringify(obj));
+  onSyndicatePersist();
 }
 
 function getDeviceId(): string {
@@ -981,6 +1040,156 @@ function formatCountdown(sec: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(rs).padStart(2, "0")}`;
 }
 
+/** Countdown for mission reminders: includes days when ≥ 24h left. */
+function formatReminderTimeLeft(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  const days = Math.floor(s / 86400);
+  const rem = s % 86400;
+  const h = Math.floor(rem / 3600);
+  const m = Math.floor((rem % 3600) / 60);
+  const rs = rem % 60;
+  if (days > 0) {
+    return `${days} day${days === 1 ? "" : "s"}, ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(rs).padStart(2, "0")}`;
+  }
+  return formatCountdown(s);
+}
+
+/** How long since the reminder deadline (for overdue / penalty rows). Same day + clock shape as time left. */
+function formatReminderOverduePast(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  const days = Math.floor(s / 86400);
+  const rem = s % 86400;
+  const h = Math.floor(rem / 3600);
+  const m = Math.floor((rem % 3600) / 60);
+  const rs = rem % 60;
+  if (days > 0) {
+    return `${days} day${days === 1 ? "" : "s"}, ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(rs).padStart(2, "0")}`;
+  }
+  return formatCountdown(s);
+}
+
+export type MissionReminderListItem = {
+  id: number;
+  title: string;
+  atIso: string;
+  dueAt: number;
+  overdue: boolean;
+  onBoard: boolean;
+  secLeft: number;
+  penaltyApplied: boolean;
+  howDraft: string;
+};
+
+function MissionReminderCard({
+  item,
+  nowTick,
+  rows,
+  onOpenMission,
+  onDismiss
+}: {
+  item: MissionReminderListItem;
+  nowTick: number;
+  rows: ChallengeRow[];
+  onOpenMission: (row: ChallengeRow) => void;
+  onDismiss: (id: number) => void;
+}) {
+  const secPast = Math.max(0, (nowTick - item.dueAt) / 1000);
+  return (
+    <li
+      className={cn(
+        "flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between",
+        item.penaltyApplied
+          ? "border-rose-400/35 bg-rose-500/10"
+          : item.overdue
+            ? "border-amber-400/45 bg-amber-500/10"
+            : "border-cyan-400/25 bg-black/25"
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/50">
+          {item.penaltyApplied ? "Deadline passed" : !item.overdue ? "Time left" : "Due now"}
+        </div>
+        <div className="mt-1 text-[16px] font-bold leading-snug text-white">{item.title}</div>
+        {item.howDraft ? (
+          <div className="mt-2 rounded-lg border border-cyan-400/20 bg-black/35 p-2.5 sm:p-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-200/70">How you completed it</div>
+            <p className="mt-1.5 max-h-[140px] overflow-y-auto whitespace-pre-wrap break-words text-[13px] leading-relaxed text-white/88 sm:text-[14px]">
+              {item.howDraft}
+            </p>
+          </div>
+        ) : null}
+        {item.penaltyApplied ? (
+          <>
+            <p className="mt-2 font-mono text-[13px] tabular-nums text-rose-200/95">−1 pt applied · reminder closed for scoring</p>
+            <div className="mt-1 font-mono text-[14px] tabular-nums leading-snug text-amber-100/85">
+              Overdue by {formatReminderOverduePast(secPast)}
+            </div>
+          </>
+        ) : (
+          <div className="mt-1 space-y-1">
+            <div className="font-mono text-[14px] tabular-nums leading-snug text-cyan-100/90">
+              {item.secLeft > 0 ? (
+                <>
+                  <span className="text-cyan-200/95">{formatReminderTimeLeft(item.secLeft)}</span>
+                  <span className="text-[12px] font-semibold text-white/55"> · remaining</span>
+                </>
+              ) : (
+                <span className="text-amber-100/90">0:00:00 · time&apos;s up</span>
+              )}
+            </div>
+            {item.overdue ? (
+              <div className="font-mono text-[14px] tabular-nums leading-snug text-amber-100/85">
+                Overdue by {formatReminderOverduePast(secPast)}
+              </div>
+            ) : null}
+          </div>
+        )}
+        <div className="mt-1 text-[12px] text-white/55">
+          Target:{" "}
+          {new Date(item.atIso).toLocaleString(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short"
+          })}
+        </div>
+        {!item.onBoard ? (
+          <p className="mt-1 text-[11px] text-amber-200/80">
+            This mission is no longer on the board (24h window). The reminder stays until the target time.
+          </p>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        {item.onBoard ? (
+          <button
+            type="button"
+            onClick={() => {
+              const r = rows.find((x) => x.id === item.id);
+              if (r) onOpenMission(r);
+            }}
+            className={cn("min-h-[44px] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.08em]", CTA_BTN)}
+          >
+            Open mission
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onDismiss(item.id)}
+            className={cn("min-h-[44px] px-4 py-2 text-[12px] font-bold uppercase tracking-[0.08em]", CTA_BTN)}
+          >
+            Done
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onDismiss(item.id)}
+          className="min-h-[44px] rounded-lg border border-white/25 px-4 py-2 text-[12px] font-semibold uppercase tracking-wide text-white/75 hover:bg-white/5"
+        >
+          Dismiss
+        </button>
+      </div>
+    </li>
+  );
+}
+
 function friendlyAdminTaskError(e: unknown): string {
   const msg = e instanceof Error ? e.message : "";
   if (!msg) return "Admin tasks are temporarily unavailable.";
@@ -1107,7 +1316,9 @@ function DetailPane({
   onBack,
   onSubmit,
   onLogout,
-  onDraftPersist
+  onDraftPersist,
+  missionReminderIso = null,
+  onMissionReminderChange
 }: {
   row: ChallengeRow;
   initialResponse: MissionResponseDraft;
@@ -1124,6 +1335,9 @@ function DetailPane({
   onLogout?: () => void;
   /** Persist draft to localStorage while typing (incomplete missions only). */
   onDraftPersist?: (draft: MissionResponseDraft) => void;
+  /** Optional reminder (local time picker); stored as ISO on the parent. */
+  missionReminderIso?: string | null;
+  onMissionReminderChange?: (iso: string | null) => void;
 }) {
   const p = row.payload;
   const [how, setHow] = useState(initialResponse.how);
@@ -1158,6 +1372,15 @@ function DetailPane({
     };
   }, [row.id, readOnlyCompleted, onDraftPersist]);
   const remainingSec = secondsUntilLocalMidnight(nowMs);
+
+  const [reminderLocal, setReminderLocal] = useState("");
+  useEffect(() => {
+    if (readOnlyCompleted || !onMissionReminderChange) {
+      setReminderLocal("");
+      return;
+    }
+    setReminderLocal(missionReminderIso ? toDatetimeLocalValue(new Date(missionReminderIso)) : "");
+  }, [missionReminderIso, row.id, readOnlyCompleted, onMissionReminderChange]);
 
   return (
     <div
@@ -1324,6 +1547,55 @@ function DetailPane({
                 placeholder="Describe what you did to complete this mission…"
                 className="syndicate-readable mb-4 min-h-[112px] w-full resize-y rounded-md border border-[rgba(255,215,0,0.35)] bg-black/60 px-3 py-3 text-[16px] leading-relaxed text-white/95 outline-none placeholder:text-white/35 focus:border-[rgba(255,215,0,0.65)] sm:text-[15px]"
               />
+              {onMissionReminderChange ? (
+                <div className="mb-6 rounded-lg border border-cyan-400/30 bg-[linear-gradient(180deg,rgba(0,45,70,0.35),rgba(0,0,0,0.25))] p-4 [box-shadow:inset_0_0_0_1px_rgba(120,200,255,0.08)]">
+                  <label
+                    className="mb-1.5 block text-[12px] font-bold uppercase tracking-[0.12em] text-cyan-200/85"
+                    htmlFor="syndicate-mission-reminder"
+                  >
+                    Reminder date &amp; time (optional)
+                  </label>
+                  <p className="mb-2 text-[11px] leading-snug text-white/50 sm:text-[12px]">
+                    The Missions tab shows time left. When the countdown hits zero and this mission is still incomplete,{" "}
+                    <span className="font-semibold text-amber-200/90">1 point is deducted</span> once from your total (per reminder).
+                  </p>
+                  <input
+                    id="syndicate-mission-reminder"
+                    type="datetime-local"
+                    value={reminderLocal}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setReminderLocal(v);
+                      if (!v) {
+                        onMissionReminderChange(null);
+                        return;
+                      }
+                      const parsed = new Date(v);
+                      if (Number.isNaN(parsed.getTime())) {
+                        onMissionReminderChange(null);
+                        return;
+                      }
+                      onMissionReminderChange(parsed.toISOString());
+                    }}
+                    className={cn(
+                      SYNDICATE_DATE_INPUT,
+                      "mt-1 w-full max-w-[min(100%,22rem)] text-[15px] text-white [color-scheme:dark]"
+                    )}
+                  />
+                  {reminderLocal ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReminderLocal("");
+                        onMissionReminderChange(null);
+                      }}
+                      className="mt-3 text-[12px] font-semibold uppercase tracking-wide text-cyan-200/80 underline-offset-4 hover:text-cyan-100 hover:underline"
+                    >
+                      Clear reminder
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <label className="mb-1.5 block text-[12px] font-semibold text-white/80" htmlFor="mission-learned">
                 What you learned from it
               </label>
@@ -1454,6 +1726,8 @@ export function SyndicateAiChallengePanel() {
   const [selected, setSelected] = useState<ChallengeRow | null>(null);
   const [pointsTotal, setPointsTotal] = useState(0);
   const [doneIds, setDoneIds] = useState<Set<number>>(() => new Set());
+  /** Per-challenge reminders (ISO instant + title snapshot); synced via syndicate progress when logged in. */
+  const [missionReminders, setMissionReminders] = useState<Record<number, MissionReminderEntry>>({});
   const [streak, setStreak] = useState(0);
   /** Server `last_activity_date` (YYYY-MM-DD); first mission completion of the day triggers streak_record. */
   const [lastActivityIso, setLastActivityIso] = useState<string | null>(null);
@@ -1466,7 +1740,7 @@ export function SyndicateAiChallengePanel() {
   const [mounted, setMounted] = useState(false);
   /** Inline stats + profile panel (not a modal). */
   const [showStatsProfile, setShowStatsProfile] = useState(false);
-  const [syndicateView, setSyndicateView] = useState<"dashboard" | "challenges">("dashboard");
+  const [syndicateView, setSyndicateView] = useState<"dashboard" | "challenges" | "reminders">("dashboard");
   /** Filter missions inside Stats & profile by mood (default: energetic). */
   const [statsMood, setStatsMood] = useState<string>("energetic");
   const [customTitle, setCustomTitle] = useState("");
@@ -1481,6 +1755,8 @@ export function SyndicateAiChallengePanel() {
   const [historyFilterDate, setHistoryFilterDate] = useState(() => todayLocalISO());
   const [missionStartMap, setMissionStartMap] = useState<Record<number, number>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
+  /** Bumps when `challenge_responses` drafts change so reminder cards re-read `loadResponses()`. */
+  const [responseDraftsVersion, setResponseDraftsVersion] = useState(0);
   const [submitBusy, setSubmitBusy] = useState(false);
   const [lastScore, setLastScore] = useState<MissionScoreResponse | null>(null);
   const [missionScores, setMissionScores] = useState<Record<number, MissionScoreResponse>>({});
@@ -1638,6 +1914,7 @@ export function SyndicateAiChallengePanel() {
       setMounted(true);
       setPointsTotal(loadTotalPoints());
       setDoneIds(loadDoneIds());
+      setMissionReminders(loadMissionReminders());
       setMissionStartMap(loadMissionStartTimes());
       setMissionScores(loadMissionScores());
       setMissionAwardedMap(loadMissionAwardedPoints());
@@ -1673,6 +1950,37 @@ export function SyndicateAiChallengePanel() {
     const t = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
+
+  /** Reminder penalties run on the server (`process_syndicate_reminder_expiries`); poll progress to sync state. */
+  useEffect(() => {
+    if (!mounted) return;
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const res = await fetchSyndicateProgress();
+        if (cancelled) return;
+        applySyncedStateFromServer(res.state);
+        setPointsTotal(loadTotalPoints());
+        setDoneIds(loadDoneIds());
+        setMissionReminders(loadMissionReminders());
+        setStreak(res.streak_count);
+        setLastActivityIso(res.last_activity_date);
+      } catch {
+        /* offline */
+      }
+    };
+    const t = window.setInterval(() => void pull(), 120_000);
+    void pull();
+    const onVis = () => {
+      if (document.visibilityState === "visible") void pull();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [mounted]);
 
   useEffect(() => {
     return () => {
@@ -1762,6 +2070,34 @@ export function SyndicateAiChallengePanel() {
       bonusMissionSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 200);
   }, []);
+
+  const dismissMissionReminder = useCallback((id: number) => {
+    setMissionReminders((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      persistMissionReminders(next);
+      return next;
+    });
+  }, []);
+
+  const setMissionReminderForSelected = useCallback((iso: string | null) => {
+    if (!selected) return;
+    setMissionReminders((prev) => {
+      const next = { ...prev };
+      if (!iso) delete next[selected.id];
+      else {
+        next[selected.id] = {
+          atIso: iso,
+          title: (selected.payload?.challenge_title ?? "Mission").trim() || "Mission",
+          penaltyApplied: false,
+          missionCreatedAtIso: selected.created_at
+        };
+      }
+      persistMissionReminders(next);
+      return next;
+    });
+  }, [selected]);
 
   const pieDailyData = useMemo(() => {
     const today = todayLocalISO();
@@ -1898,8 +2234,13 @@ export function SyndicateAiChallengePanel() {
     return () => window.clearInterval(t);
   }, [streak, pollReferral]);
 
+  const rowsOnMissionBoard = useMemo(
+    () => rows.filter((r) => rowWithinMissionBoardTtl(r, nowTick)),
+    [rows, nowTick]
+  );
+
   const filteredRows = useMemo(() => {
-    const base = rows.filter((r) => {
+    const base = rowsOnMissionBoard.filter((r) => {
       if (!challengeMatchesStatsMood(r, statsMood)) return false;
       const k = (r.category || r.payload?.category || "").toLowerCase();
       if (catFilter !== "all" && k !== catFilter) return false;
@@ -1909,7 +2250,7 @@ export function SyndicateAiChallengePanel() {
       return true;
     });
     return dedupePrimaryMoodSystemRows(applyMoodCategoryPairHide(base, doneIds));
-  }, [rows, catFilter, doneFilter, doneIds, statsMood]);
+  }, [rowsOnMissionBoard, catFilter, doneFilter, doneIds, statsMood]);
 
   useEffect(() => {
     if (!selected) return;
@@ -1935,7 +2276,7 @@ export function SyndicateAiChallengePanel() {
   const dailyVisibleMissionRows = useMemo(() => {
     const grouped: Record<string, ChallengeRow[]> = {};
     for (const c of CATEGORIES) grouped[c] = [];
-    for (const r of rows) {
+    for (const r of rowsOnMissionBoard) {
       const k = (r.category || r.payload?.category || "").toLowerCase();
       if (CATEGORIES.includes(k as (typeof CATEGORIES)[number])) grouped[k].push(r);
     }
@@ -1950,7 +2291,7 @@ export function SyndicateAiChallengePanel() {
       }
     }
     return out;
-  }, [rows]);
+  }, [rowsOnMissionBoard]);
   const userMissionRows = useMemo(() => {
     const seen = new Set<number>();
     const out: ChallengeRow[] = [];
@@ -1970,6 +2311,44 @@ export function SyndicateAiChallengePanel() {
   }, [byCategoryFiltered]);
   const userCompletedCount = useMemo(() => userMissionRows.filter((r) => doneIds.has(r.id)).length, [userMissionRows, doneIds]);
   const userRemainingCount = useMemo(() => Math.max(0, dailyVisibleMissionRows.length - userCompletedCount), [dailyVisibleMissionRows.length, userCompletedCount]);
+  /** Incomplete missions with a saved reminder — shown under the mission grid on the Missions tab. */
+  const missionsTabReminders = useMemo(() => {
+    const responses = loadResponses();
+    const items: {
+      id: number;
+      title: string;
+      atIso: string;
+      dueAt: number;
+      overdue: boolean;
+      onBoard: boolean;
+      secLeft: number;
+      penaltyApplied: boolean;
+      /** Saved “how you completed it” draft for this mission (from mission detail). */
+      howDraft: string;
+    }[] = [];
+    for (const [key, entry] of Object.entries(missionReminders)) {
+      const id = parseInt(key, 10);
+      if (!Number.isFinite(id) || doneIds.has(id)) continue;
+      const dueAt = Date.parse(entry.atIso);
+      if (Number.isNaN(dueAt)) continue;
+      const row = rowsOnMissionBoard.find((r) => r.id === id);
+      const secLeft = Math.max(0, (dueAt - nowTick) / 1000);
+      const howDraft = (responses[id]?.how ?? "").trim();
+      items.push({
+        id,
+        title: (row?.payload?.challenge_title ?? entry.title ?? "Mission").trim() || "Mission",
+        atIso: entry.atIso,
+        dueAt,
+        overdue: dueAt <= nowTick,
+        onBoard: !!row,
+        secLeft,
+        penaltyApplied: entry.penaltyApplied === true,
+        howDraft
+      });
+    }
+    items.sort((a, b) => a.dueAt - b.dueAt);
+    return items;
+  }, [missionReminders, doneIds, rowsOnMissionBoard, nowTick, responseDraftsVersion]);
   const dayCountdownSec = useMemo(() => secondsUntilLocalMidnight(nowTick), [nowTick]);
   const completedAgentTodayCount = useMemo(
     () => rows.filter((r) => !r.user_created && doneIds.has(r.id)).length,
@@ -2299,6 +2678,10 @@ export function SyndicateAiChallengePanel() {
         setStreak(pr.streak_count);
         setLastActivityIso(pr.last_activity_date);
         applySyncedStateFromServer(pr.state ?? {});
+        // New day ⇒ challenge IDs change; drop reminders so stale IDs are not synced back.
+        window.localStorage.removeItem(ls("mission_reminders_v1"));
+        persistMissionReminders({});
+        setMissionReminders({});
         setMissionCompletionLog(loadMissionCompletionLog());
       } catch {
         /* streak unchanged if progress fetch fails */
@@ -2702,6 +3085,7 @@ export function SyndicateAiChallengePanel() {
       const responses = loadResponses();
       responses[id] = { how, learned };
       persistResponses(responses);
+      setResponseDraftsVersion((v) => v + 1);
 
       const startedAt = missionStartMap[id] ?? Date.now();
       const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
@@ -2783,6 +3167,14 @@ export function SyndicateAiChallengePanel() {
       delete nextStarts[id];
       persistMissionStartTimes(nextStarts);
       setMissionStartMap(nextStarts);
+
+      setMissionReminders((rmPrev) => {
+        if (!rmPrev[id]) return rmPrev;
+        const rmNext = { ...rmPrev };
+        delete rmNext[id];
+        persistMissionReminders(rmNext);
+        return rmNext;
+      });
     } catch (e) {
       if (e instanceof SyndicateSessionLostError) return;
       setError(e instanceof Error ? e.message : "Unable to score mission response.");
@@ -2804,6 +3196,7 @@ export function SyndicateAiChallengePanel() {
     const responses = loadResponses();
     responses[selected.id] = draft;
     persistResponses(responses);
+    setResponseDraftsVersion((v) => v + 1);
   }, [selected]);
   const selectedScorePreview = selected ? missionScores[selected.id] ?? lastScore : null;
   const selectedAwardedPoints =
@@ -2989,6 +3382,8 @@ export function SyndicateAiChallengePanel() {
           onSubmit={handleSubmit}
           onLogout={handleSyndicateLogout}
           onDraftPersist={doneIds.has(selected.id) ? undefined : persistMissionDraft}
+          missionReminderIso={missionReminders[selected.id]?.atIso ?? null}
+          onMissionReminderChange={doneIds.has(selected.id) ? undefined : setMissionReminderForSelected}
         />
       </>
     );
@@ -3043,6 +3438,27 @@ export function SyndicateAiChallengePanel() {
             )}
           >
             Missions
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSyndicateView("reminders");
+              setShowStatsProfile(false);
+            }}
+            className={cn(
+              "min-h-[44px] min-w-0 touch-manipulation px-3 py-2.5 text-[11px] font-bold uppercase tracking-[0.06em] transition sm:min-w-[140px] sm:px-4 sm:py-3 sm:text-[12px] sm:tracking-[0.08em]",
+              GAME_BTN,
+              syndicateView === "reminders"
+                ? "border-cyan-400/55 text-cyan-100 [text-shadow:0_0_14px_rgba(34,211,238,0.28)]"
+                : GAME_BTN_NAV_IDLE
+            )}
+          >
+            Reminders
+            {missionsTabReminders.length > 0 ? (
+              <span className="ml-1.5 inline-flex min-h-[1.1rem] min-w-[1.1rem] items-center justify-center rounded-full bg-cyan-500/35 px-1 text-[10px] font-black tabular-nums leading-none text-cyan-50">
+                {missionsTabReminders.length > 9 ? "9+" : missionsTabReminders.length}
+              </span>
+            ) : null}
           </button>
           <button
             type="button"
@@ -3651,6 +4067,54 @@ export function SyndicateAiChallengePanel() {
             </div>
 
             <div className="grid grid-cols-1 gap-4">
+              {missionsTabReminders.length > 0 ? (
+                <section
+                  className="syndicate-readable w-full min-w-0 rounded-2xl border border-cyan-400/35 bg-[linear-gradient(165deg,rgba(0,40,64,0.55),rgba(10,8,6,0.92))] px-3 py-4 [box-shadow:0_0_0_1px_rgba(120,200,255,0.2),0_8px_32px_rgba(0,0,0,0.35)] sm:px-5 sm:py-5"
+                  aria-label="Mission reminders dashboard"
+                >
+                  <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-[13px] font-black uppercase tracking-[0.18em] text-cyan-200/95">Next reminder</h3>
+                      <p className="mt-1 text-[11px] text-white/55">
+                        {missionsTabReminders.length} active · nearest target first
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowStatsProfile(false);
+                        setSyndicateView("reminders");
+                      }}
+                      className={cn(
+                        "min-h-[40px] shrink-0 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.1em] sm:min-h-[44px] sm:px-4 sm:text-[12px]",
+                        CTA_BTN
+                      )}
+                    >
+                      See all your reminders
+                      {missionsTabReminders.length > 1 ? ` (${missionsTabReminders.length})` : ""}
+                    </button>
+                  </div>
+                  <p className="mb-4 text-[12px] leading-snug text-white/55">
+                    For the first 24 hours after a mission appears, use <span className="font-semibold text-white/75">Open mission</span>{" "}
+                    to complete it (the reminder clears on submit). After 24 hours, only <span className="font-semibold text-white/75">Done</span>{" "}
+                    or <span className="font-semibold text-white/75">Dismiss</span> is available — no points change. If the reminder target time passes
+                    with no completion, the server deducts <span className="font-semibold text-amber-200/90">1 point</span> and removes the reminder.
+                  </p>
+                  <ul className="space-y-3">
+                    {missionsTabReminders[0] ? (
+                      <MissionReminderCard
+                        key={`dashboard-rem-${missionsTabReminders[0].id}`}
+                        item={missionsTabReminders[0]}
+                        nowTick={nowTick}
+                        rows={rows}
+                        onOpenMission={openMissionDetail}
+                        onDismiss={dismissMissionReminder}
+                      />
+                    ) : null}
+                  </ul>
+                </section>
+              ) : null}
+
               <div className={cn("border-b border-[rgba(255,215,0,0.28)] pb-3", "bg-transparent")}>
                 <div className={HUD_LABEL}>Mission stats</div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -3713,9 +4177,11 @@ export function SyndicateAiChallengePanel() {
           <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.6fr_1fr]">
             <div className={cn("border-b border-[rgba(255,215,0,0.28)] pb-3", "bg-transparent")}>
               <div className={HUD_LABEL}>Daily mission</div>
-              <div className="mt-1 text-[26px] font-black leading-tight text-white">{rows[0]?.payload?.challenge_title ?? "No mission loaded"}</div>
+              <div className="mt-1 text-[26px] font-black leading-tight text-white">
+                {rowsOnMissionBoard[0]?.payload?.challenge_title ?? "No mission loaded"}
+              </div>
               <div className="mt-2 flex items-center gap-2 text-[12px] text-white/75">
-                <span className="border border-white/15 px-2 py-0.5">{rows[0]?.points ?? 0} XP</span>
+                <span className="border border-white/15 px-2 py-0.5">{rowsOnMissionBoard[0]?.points ?? 0} XP</span>
                 <span>{doneIds.size} completed today</span>
               </div>
               <div className="mt-3 flex gap-2">
@@ -4452,6 +4918,69 @@ export function SyndicateAiChallengePanel() {
               </div>
             ) : null}
           </div>
+
+          {missionsTabReminders.length > 0 ? (
+            <div className="syndicate-readable mt-8 flex flex-col gap-3 rounded-xl border border-cyan-400/35 bg-[linear-gradient(165deg,rgba(0,40,64,0.45),rgba(10,8,6,0.88))] px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-[14px] text-white/82">
+                <span className="font-black tabular-nums text-cyan-200/95">{missionsTabReminders.length}</span> mission reminder
+                {missionsTabReminders.length === 1 ? "" : "s"} — open the full list to manage them.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowStatsProfile(false);
+                  setSyndicateView("reminders");
+                }}
+                className={cn("min-h-[44px] shrink-0 px-4 py-2 text-[12px] font-bold uppercase tracking-[0.08em]", CTA_BTN)}
+              >
+                See all your reminders
+              </button>
+            </div>
+          ) : null}
+          </>
+          ) : syndicateView === "reminders" ? (
+          <>
+            <div className="syndicate-readable mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-[21px] font-black uppercase tracking-[0.1em] text-[color:var(--gold)] sm:text-[24px]">
+                Your mission reminders
+              </h3>
+              <button
+                type="button"
+                onClick={() => setSyndicateView("dashboard")}
+                className="rounded-lg border border-white/25 px-4 py-2 text-[12px] font-semibold uppercase tracking-wide text-white/85 hover:bg-white/5"
+              >
+                Back to dashboard
+              </button>
+            </div>
+            <p className="syndicate-readable mb-6 max-w-3xl text-[13px] leading-relaxed text-white/70 sm:text-[14px]">
+              Set date &amp; time under <span className="text-white/85">How you completed it</span> on an incomplete mission. Reminders stay until the target time or you clear them.
+              Within 24 hours of the mission appearing, use <span className="font-semibold text-cyan-200/90">Open mission</span>; after that, use{" "}
+              <span className="font-semibold text-cyan-200/90">Done</span> or <span className="font-semibold text-cyan-200/90">Dismiss</span>. If the target passes with no action, the server may deduct{" "}
+              <span className="font-semibold text-amber-200/90">1 point</span> and remove the reminder.
+            </p>
+            {missionsTabReminders.length === 0 ? (
+              <p className="syndicate-readable rounded-lg border border-white/10 bg-black/30 px-4 py-8 text-center text-[14px] text-white/55">
+                No active reminders. Add one from any incomplete mission&apos;s detail view.
+              </p>
+            ) : (
+              <section
+                className="syndicate-readable w-full min-w-0 rounded-2xl border border-cyan-400/35 bg-[linear-gradient(165deg,rgba(0,40,64,0.55),rgba(10,8,6,0.92))] px-3 py-5 [box-shadow:0_0_0_1px_rgba(120,200,255,0.2),0_8px_32px_rgba(0,0,0,0.35)] sm:px-5 sm:py-6"
+                aria-label="All mission reminders"
+              >
+                <ul className="space-y-3">
+                  {missionsTabReminders.map((item) => (
+                    <MissionReminderCard
+                      key={`all-rem-${item.id}`}
+                      item={item}
+                      nowTick={nowTick}
+                      rows={rows}
+                      onOpenMission={openMissionDetail}
+                      onDismiss={dismissMissionReminder}
+                    />
+                  ))}
+                </ul>
+              </section>
+            )}
           </>
           ) : null}
         </>
