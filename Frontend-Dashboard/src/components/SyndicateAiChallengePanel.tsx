@@ -3375,6 +3375,103 @@ export function SyndicateAiChallengePanel() {
     setError(null);
   }
 
+  function renderPointsToPoundsSection() {
+    const previewPounds =
+      (((Math.max(0, parseFloat(convertPointsInput || "0")) || 0) / POINTS_PER_10_POUNDS) * POUNDS_PER_100_POINTS) || 0;
+    return (
+      <div className="relative">
+        <div className="pointer-events-none absolute -right-8 -top-10 h-36 w-36 rounded-full bg-amber-400/[0.07] blur-3xl" aria-hidden />
+        <div className="pointer-events-none absolute -bottom-6 -left-6 h-28 w-28 rounded-full bg-cyan-400/[0.06] blur-2xl" aria-hidden />
+        <div className="relative">
+          <div className="flex flex-col gap-4 border-b border-white/[0.08] pb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+            <div className="min-w-0 text-center sm:text-left">
+              <div className="inline-flex items-center gap-2">
+                <span className="rounded-full border border-amber-400/35 bg-gradient-to-r from-amber-500/20 to-amber-600/10 px-2.5 py-0.5 text-[9px] font-black uppercase tracking-[0.22em] text-amber-100/95">
+                  Exchange
+                </span>
+              </div>
+              <h3 className="mt-2.5 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+                <span className="text-[18px] font-black uppercase tracking-[0.06em] text-[color:var(--gold)] [text-shadow:0_0_20px_rgba(255,200,80,0.12)] sm:text-[21px]">
+                  Points to pounds
+                </span>
+                <SyndicateHelpMark
+                  topic="points-to-pounds"
+                  label="How points to pounds and course unlocks work"
+                  onOpen={setSyndicateHelpPanel}
+                />
+              </h3>
+              <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-white/62 sm:text-[14px]">
+                Spend points from your lifetime total; pounds credit applies immediately at the rate shown.
+              </p>
+            </div>
+            <div className="shrink-0 rounded-xl border border-emerald-400/25 bg-gradient-to-br from-emerald-950/55 to-black/40 px-4 py-3 text-center shadow-[inset_0_1px_0_rgba(167,243,208,0.12)] sm:min-w-[11rem] sm:text-right">
+              <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200/75">Fixed rate</div>
+              <div className="mt-1 font-mono text-[15px] font-bold tabular-nums leading-none text-emerald-50">
+                {POINTS_PER_10_POUNDS} pts → £{POUNDS_PER_100_POINTS}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2.5 lg:grid-cols-4 lg:gap-3">
+            <div
+              className="rounded-xl border border-cyan-400/25 bg-gradient-to-b from-cyan-950/50 to-black/50 px-2.5 py-3 text-center shadow-[0_4px_20px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(165,243,252,0.08)] sm:px-3"
+              title="Time until local midnight (daily mission window)"
+            >
+              <div className={cn(HUD_LABEL, "!text-[9px] text-cyan-200/75")}>Day ends</div>
+              <div
+                className={cn(
+                  HUD_VALUE,
+                  "mt-1 text-[19px] text-cyan-50 [text-shadow:0_0_16px_rgba(34,211,238,0.25)] sm:text-[22px]"
+                )}
+              >
+                {formatCountdown(dayCountdownSec)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-sky-400/25 bg-gradient-to-b from-sky-950/45 to-black/50 px-2.5 py-3 text-center shadow-[0_4px_20px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(186,230,253,0.07)] sm:px-3">
+              <div className={cn(HUD_LABEL, "!text-[9px] text-sky-200/80")}>Available</div>
+              <div className={cn(HUD_VALUE, "mt-1 text-[21px] text-sky-50 sm:text-[24px]")}>{pointsTotal}</div>
+            </div>
+            <div className="rounded-xl border border-emerald-400/30 bg-gradient-to-b from-emerald-950/55 to-black/50 px-2.5 py-3 text-center shadow-[0_4px_20px_rgba(0,0,0,0.32),inset_0_1px_0_rgba(167,243,208,0.08)] sm:px-3">
+              <div className={cn(HUD_LABEL, "!text-[9px] text-emerald-200/80")}>£ Balance</div>
+              <div className={cn(HUD_VALUE, "mt-1 text-[19px] text-emerald-50 sm:text-[22px]")}>£{poundsBalance.toFixed(2)}</div>
+            </div>
+            <div className="rounded-xl border border-amber-400/35 bg-gradient-to-b from-amber-950/40 to-black/50 px-2.5 py-3 text-center shadow-[0_4px_20px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(253,230,138,0.08)] sm:px-3">
+              <div className={cn(HUD_LABEL, "!text-[9px] text-amber-200/85")}>Preview</div>
+              <div className={cn(HUD_VALUE, "mt-1 text-[19px] text-amber-50 sm:text-[22px]")}>£{previewPounds.toFixed(2)}</div>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-xl border border-white/[0.1] bg-black/40 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-4">
+            <label className="text-[11px] font-bold uppercase tracking-[0.14em] text-white/55" htmlFor="syndicate-convert-points-input">
+              Points to convert
+            </label>
+            <div className="mt-2 flex flex-col gap-2.5 sm:flex-row sm:items-stretch sm:gap-3">
+              <input
+                id="syndicate-convert-points-input"
+                type="number"
+                min={1}
+                step={1}
+                value={convertPointsInput}
+                onChange={(e) => setConvertPointsInput(e.target.value)}
+                className="min-h-[48px] w-full min-w-0 flex-1 rounded-lg border border-amber-400/30 bg-[#0c0a08] px-4 py-3 text-[17px] font-semibold tabular-nums text-amber-50/95 outline-none ring-0 transition placeholder:text-white/25 focus:border-amber-400/55 focus:shadow-[0_0_0_3px_rgba(251,191,36,0.12)] sm:max-w-[16rem] sm:text-[16px]"
+              />
+              <button
+                type="button"
+                onClick={convertPointsToPounds}
+                className={cn(
+                  "min-h-[48px] shrink-0 rounded-lg border border-amber-400/40 bg-gradient-to-b from-amber-500/25 to-amber-950/60 px-6 py-3 text-[14px] font-black uppercase tracking-[0.1em] text-amber-50 shadow-[0_4px_20px_rgba(245,158,11,0.15)] transition hover:border-amber-300/50 hover:from-amber-400/35 sm:px-8",
+                  "active:scale-[0.98]"
+                )}
+              >
+                Convert
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const completionToast =
     missionCompleteToast !== null ? (
       <div
@@ -4169,6 +4266,14 @@ export function SyndicateAiChallengePanel() {
                   </div>
                 </div>
               </div>
+              <div className="hidden xl:block">
+                <section
+                  id="syndicate-points-to-pounds"
+                  className="syndicate-readable mt-4 w-full min-w-0 overflow-hidden rounded-2xl border border-amber-400/20 bg-[linear-gradient(165deg,rgba(32,26,14,0.95),rgba(8,6,5,0.98))] px-3 py-4 shadow-[0_16px_48px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,200,120,0.06)] sm:px-5 sm:py-6"
+                >
+                  {renderPointsToPoundsSection()}
+                </section>
+              </div>
               <div className="mt-4">
                 <div className="mb-1 flex items-center justify-between text-[11px] text-white/70">
                   <span>Daily completion quota</span>
@@ -4338,6 +4443,15 @@ export function SyndicateAiChallengePanel() {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="xl:hidden mt-4 w-full">
+            <section
+              className="syndicate-readable w-full min-w-0 overflow-hidden rounded-2xl border border-amber-400/20 bg-[linear-gradient(165deg,rgba(32,26,14,0.95),rgba(8,6,5,0.98))] px-3 py-4 shadow-[0_16px_48px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,200,120,0.06)] sm:px-5 sm:py-6"
+              aria-label="Points to pounds"
+            >
+              {renderPointsToPoundsSection()}
+            </section>
           </div>
         </section>
       ) : null}
@@ -4735,78 +4849,6 @@ export function SyndicateAiChallengePanel() {
                 })}
               </div>
             )}
-          </section>
-          ) : null}
-
-          {!showStatsProfile && syndicateView === "dashboard" ? (
-          <section className="syndicate-readable mt-10 w-full min-w-0 border-t border-[rgba(255,215,0,0.28)] px-2 py-6 sm:px-3 sm:py-7">
-            <div className="text-center">
-              <h3 className="flex flex-wrap items-center justify-center gap-3 text-[24px] font-black uppercase tracking-[0.1em] text-[color:var(--gold)] [text-shadow:0_0_22px_rgba(255,215,0,0.18)] sm:text-[28px] md:text-[32px]">
-                <span>Points to pounds</span>
-                <SyndicateHelpMark
-                  topic="points-to-pounds"
-                  label="How points to pounds and course unlocks work"
-                  onOpen={setSyndicateHelpPanel}
-                />
-              </h3>
-              <div className="mt-1 text-[17px] font-bold tabular-nums text-white/88 sm:mt-2 sm:text-[18px]">
-                Rate: 100 points = 10 pounds
-              </div>
-            </div>
-            <p className="mx-auto mt-4 max-w-3xl text-center text-[17px] font-medium leading-[1.65] text-white/88 sm:text-[18px] sm:leading-relaxed">
-              Convert your mission points into cash value. Enter any points amount you want to convert, and your pounds balance updates instantly using the current rate.
-            </p>
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="border border-cyan-400/65 bg-[linear-gradient(135deg,rgba(34,211,238,0.28),rgba(6,182,212,0.2)_45%,rgba(6,28,42,0.94)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_16px_rgba(34,211,238,0.3),inset_0_1px_0_rgba(200,250,255,0.35)]">
-                <div className={cn(HUD_LABEL, "text-cyan-100/80")}>Day ends</div>
-                <div
-                  className={cn(
-                    HUD_VALUE,
-                    "text-[22px] text-cyan-100 [text-shadow:0_0_14px_rgba(34,211,238,0.35),0_1px_0_rgba(0,0,0,0.8)] sm:text-[26px]"
-                  )}
-                  title="Time until local midnight (daily mission window)"
-                >
-                  {formatCountdown(dayCountdownSec)}
-                </div>
-              </div>
-              <div className="border border-sky-300/70 bg-[linear-gradient(135deg,rgba(56,189,248,0.34),rgba(59,130,246,0.24)_45%,rgba(10,20,60,0.92)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_14px_rgba(56,189,248,0.28),inset_0_1px_0_rgba(210,240,255,0.42)]">
-                <div className={HUD_LABEL}>Available points</div>
-                <div className={cn(HUD_VALUE, "text-[24px] text-sky-100")}>{pointsTotal}</div>
-              </div>
-              <div className="border border-emerald-300/70 bg-[linear-gradient(135deg,rgba(16,185,129,0.34),rgba(20,184,166,0.24)_45%,rgba(2,44,34,0.9)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_14px_rgba(16,185,129,0.26),inset_0_1px_0_rgba(190,255,225,0.4)]">
-                <div className={HUD_LABEL}>Pounds balance</div>
-                <div className={cn(HUD_VALUE, "text-[24px] text-emerald-100")}>£{poundsBalance.toFixed(2)}</div>
-              </div>
-              <div className="border border-amber-300/75 bg-[linear-gradient(135deg,rgba(251,191,36,0.34),rgba(245,158,11,0.26)_45%,rgba(66,32,2,0.92)_100%)] px-3 py-3 text-center [clip-path:polygon(8%_0,100%_0,92%_100%,0_100%)] [box-shadow:0_0_14px_rgba(245,158,11,0.3),inset_0_1px_0_rgba(255,237,170,0.42)]">
-                <div className={HUD_LABEL}>Will receive</div>
-                <div className={cn(HUD_VALUE, "text-[24px] text-amber-100")}>
-                  £
-                  {(
-                    (((Math.max(0, parseFloat(convertPointsInput || "0")) || 0) / POINTS_PER_10_POUNDS) * POUNDS_PER_100_POINTS) || 0
-                  ).toFixed(2)}
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-              <div className="w-full min-w-0 sm:w-auto">
-                <label className="text-[13px] font-semibold uppercase tracking-[0.1em] text-white/70">Points to convert</label>
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={convertPointsInput}
-                  onChange={(e) => setConvertPointsInput(e.target.value)}
-                  className="mt-1.5 block min-h-[44px] w-full max-w-full rounded-md border border-[rgba(255,215,0,0.45)] bg-[linear-gradient(180deg,rgba(28,22,12,0.92),rgba(10,8,6,0.96))] px-3 py-2.5 text-[16px] tabular-nums text-[#fefce8] [box-shadow:inset_0_1px_0_rgba(255,220,160,0.12)] sm:max-w-[220px] sm:text-[15px]"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={convertPointsToPounds}
-                className={cn("min-h-[44px] w-full px-5 py-3 text-[15px] font-bold uppercase tracking-[0.08em] sm:w-auto", CTA_BTN)}
-              >
-                Convert now
-              </button>
-            </div>
           </section>
           ) : null}
 
