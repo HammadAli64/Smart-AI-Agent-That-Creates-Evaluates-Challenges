@@ -511,7 +511,7 @@ function SyndicateHelpMark({
       type="button"
       onClick={() => onOpen(topic)}
       aria-label={label}
-      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-red-500/90 bg-red-950/80 text-[17px] font-black leading-none text-red-400 shadow-[0_0_14px_rgba(239,68,68,0.45)] transition hover:border-red-400 hover:bg-red-900/90 hover:text-red-300 hover:shadow-[0_0_20px_rgba(248,113,113,0.55)] focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/70 sm:h-9 sm:w-9 sm:text-[19px]"
+      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-red-400/60 bg-[radial-gradient(circle_at_35%_30%,rgba(254,202,202,0.22),rgba(60,10,14,0.96)_62%)] text-[10px] font-black leading-none text-red-50 shadow-[0_0_6px_rgba(248,113,113,0.4),inset_0_1px_0_rgba(254,226,226,0.2)] transition hover:scale-[1.05] hover:border-red-300/90 hover:text-white hover:shadow-[0_0_10px_rgba(248,113,113,0.55)] focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/65 sm:h-5 sm:w-5 sm:text-[10px]"
     >
       ?
     </button>
@@ -4316,12 +4316,14 @@ export function SyndicateAiChallengePanel() {
                       {missionsTabReminders.length > 1 ? ` (${missionsTabReminders.length})` : ""}
                     </button>
                   </div>
-                  <p className="mb-4 text-[12px] leading-snug text-white/55">
-                    For the first 24 hours after a mission appears, use <span className="font-semibold text-white/75">Open mission</span>{" "}
-                    to complete it (the reminder clears on submit). After 24 hours, only <span className="font-semibold text-white/75">Done</span>{" "}
-                    or <span className="font-semibold text-white/75">Dismiss</span> is available — no points change. If the reminder target time passes
-                    with no completion, the server deducts <span className="font-semibold text-amber-200/90">1 point</span> and removes the reminder.
-                  </p>
+                  <div className="mb-4 flex items-center gap-2 rounded-lg border border-cyan-400/25 bg-black/25 px-3 py-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-white/68">Reminder rules</span>
+                    <SyndicateHelpMark
+                      topic="mission-reminder"
+                      label="How mission reminders work and how points can change"
+                      onOpen={setSyndicateHelpPanel}
+                    />
+                  </div>
                   <ul className="space-y-3">
                     {missionsTabReminders[0] ? (
                       <MissionReminderCard
@@ -5216,3 +5218,4 @@ export function SyndicateAiChallengePanel() {
     </>
   );
 }
+
