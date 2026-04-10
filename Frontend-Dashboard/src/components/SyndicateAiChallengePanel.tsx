@@ -1281,6 +1281,16 @@ function restoreDaysLeft(nowMs: number = Date.now()): number {
   return RESTORE_WINDOW_CALENDAR_DAYS - days;
 }
 
+/** Stored when the server resets streak after a missed day (`streak_before_break` in syndicate state). */
+function readStreakBeforeBreakCount(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(ls("streak_before_break"));
+  if (raw == null || raw === "") return null;
+  const n = parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(999, n);
+}
+
 function difficultyStyle(d: string) {
   const x = d.toLowerCase();
   if (x === "easy") return "border-emerald-500/50 bg-emerald-500/10 text-emerald-200";
@@ -3334,6 +3344,10 @@ export function SyndicateAiChallengePanel() {
     () => (showRestore ? restoreDaysLeft(nowTick) : 0),
     [showRestore, nowTick]
   );
+  const streakBeforeBreakCount = useMemo(
+    () => (streak === 0 && showRestore ? readStreakBeforeBreakCount() : null),
+    [streak, showRestore, nowTick]
+  );
   const openStreakRestoreSection = useCallback(() => {
     setShowStatsProfile(true);
     window.setTimeout(() => {
@@ -3867,9 +3881,23 @@ export function SyndicateAiChallengePanel() {
                   value comes from your server progress, not only this device.
                 </p>
                 {showRestore ? (
-                  <p className="mt-2 text-[14px] font-semibold text-amber-200/95">
-                    Your streak is 0. You can restore it in the next {restoreDaysLeftCount}{" "}
-                    {restoreDaysLeftCount === 1 ? "day" : "days"} (max {RESTORE_WINDOW_CALENDAR_DAYS} days from the break).
+                  <p className="mt-2 text-[14px] font-semibold leading-relaxed text-amber-200/95">
+                    {streakBeforeBreakCount != null ? (
+                      <>
+                        Your streak was <span className="tabular-nums text-amber-50">{streakBeforeBreakCount}</span> day
+                        {streakBeforeBreakCount === 1 ? "" : "s"}; it is <span className="tabular-nums text-amber-50">0</span>{" "}
+                        now. You can still restore it — <span className="tabular-nums text-amber-50">{restoreDaysLeftCount}</span>{" "}
+                        calendar {restoreDaysLeftCount === 1 ? "day" : "days"} left (counts down each day; max{" "}
+                        {RESTORE_WINDOW_CALENDAR_DAYS} from the break).
+                      </>
+                    ) : (
+                      <>
+                        Your streak is <span className="tabular-nums text-amber-50">0</span>. You can restore it during the next{" "}
+                        <span className="tabular-nums text-amber-50">{restoreDaysLeftCount}</span>{" "}
+                        {restoreDaysLeftCount === 1 ? "day" : "days"} (one fewer each day; max {RESTORE_WINDOW_CALENDAR_DAYS} from the
+                        break).
+                      </>
+                    )}
                   </p>
                 ) : null}
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -4273,17 +4301,29 @@ export function SyndicateAiChallengePanel() {
                     <div className={cn(HUD_LABEL, "text-fuchsia-100/85")}>Streak 🔥</div>
                     <SyndicateHelpMark topic="hud-streak" label="How streak works" onOpen={setSyndicateHelpPanel} />
                   </div>
-                  <div className="mt-1 text-[20px] font-black text-fuchsia-100">🔥 {streak}d</div>
+                  <div className="mt-1 text-[20px] font-black text-fuchsia-100">
+                    🔥 {streak === 0 ? "0 days" : `${streak}d`}
+                  </div>
                   <div className="mt-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-fuchsia-200/80">Consecutive days</div>
                   <div className="mt-auto flex flex-1 flex-col justify-end gap-1.5 pt-2">
                     <p className="text-[10px] leading-snug text-fuchsia-100/78">
                       {streak === 0 ? (
                         showRestore ? (
-                          <>
-                            Your streak is <span className="font-semibold text-fuchsia-50/95">0</span>. You can restore it in the next{" "}
-                            <span className="font-black tabular-nums text-fuchsia-100">{restoreDaysLeftCount}</span>{" "}
-                            {restoreDaysLeftCount === 1 ? "day" : "days"}.
-                          </>
+                          streakBeforeBreakCount != null ? (
+                            <>
+                              Your streak was <span className="font-black tabular-nums text-fuchsia-100">{streakBeforeBreakCount}</span>{" "}
+                              day{streakBeforeBreakCount === 1 ? "" : "s"}; now{" "}
+                              <span className="font-black tabular-nums text-fuchsia-100">0</span>. Restore within{" "}
+                              <span className="font-black tabular-nums text-fuchsia-100">{restoreDaysLeftCount}</span>{" "}
+                              {restoreDaysLeftCount === 1 ? "day" : "days"}. The number drops by 1 each new calendar day.
+                            </>
+                          ) : (
+                            <>
+                              Your streak is <span className="font-black tabular-nums text-fuchsia-100">0</span>. Restore within{" "}
+                              <span className="font-black tabular-nums text-fuchsia-100">{restoreDaysLeftCount}</span>{" "}
+                              {restoreDaysLeftCount === 1 ? "day" : "days"} — one fewer each calendar day.
+                            </>
+                          )
                         ) : (
                           <>
                             Your streak is <span className="font-semibold text-fuchsia-50/95">0</span>. Complete a mission today to start a new run.
@@ -4296,9 +4336,15 @@ export function SyndicateAiChallengePanel() {
                     <button
                       type="button"
                       onClick={openStreakRestoreSection}
-                      className="mx-auto text-[10px] font-bold uppercase tracking-[0.12em] text-fuchsia-200 underline decoration-fuchsia-400/50 underline-offset-2 transition hover:text-white hover:decoration-white"
+                      className="mx-auto max-w-[95%] text-center text-[10px] font-bold leading-snug tracking-wide text-fuchsia-200 underline decoration-fuchsia-400/50 underline-offset-2 transition hover:text-white hover:decoration-white sm:text-[11px]"
                     >
-                      {showRestore ? `Restore · ${restoreDaysLeftCount}d left` : "Restore streak"}
+                      {showRestore ? (
+                        <>
+                          Restore streak — {restoreDaysLeftCount} {restoreDaysLeftCount === 1 ? "day" : "days"} left
+                        </>
+                      ) : (
+                        "Restore streak"
+                      )}
                     </button>
                   </div>
                 </div>
