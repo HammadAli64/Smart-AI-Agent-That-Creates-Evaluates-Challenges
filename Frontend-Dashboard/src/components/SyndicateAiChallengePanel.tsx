@@ -1291,6 +1291,21 @@ function readStreakBeforeBreakCount(): number | null {
   return Math.min(999, n);
 }
 
+function parseStreakBeforeBreakFromSyncedState(state: Record<string, string> | undefined): number | null {
+  if (!state) return null;
+  const raw = state["streak_before_break"];
+  if (raw == null || raw === "") return null;
+  const n = parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(999, n);
+}
+
+/** Server-backed “streak before break” while current streak is 0; null when streak > 0. */
+function streakBeforeBreakHintForProgress(streakCount: number, state: Record<string, string> | undefined): number | null {
+  if (streakCount !== 0) return null;
+  return parseStreakBeforeBreakFromSyncedState(state);
+}
+
 function difficultyStyle(d: string) {
   const x = d.toLowerCase();
   if (x === "easy") return "border-emerald-500/50 bg-emerald-500/10 text-emerald-200";
@@ -1835,6 +1850,8 @@ export function SyndicateAiChallengePanel() {
   /** Per-challenge reminders (ISO instant + title snapshot); synced via syndicate progress when logged in. */
   const [missionReminders, setMissionReminders] = useState<Record<number, MissionReminderEntry>>({});
   const [streak, setStreak] = useState(0);
+  /** From last `me/progress/` payload when streak is 0 (avoids missing “was X” before localStorage sync). */
+  const [streakBeforeBreakHint, setStreakBeforeBreakHint] = useState<number | null>(null);
   /** Server `last_activity_date` (YYYY-MM-DD); first mission completion of the day triggers streak_record. */
   const [lastActivityIso, setLastActivityIso] = useState<string | null>(null);
   const [catFilter, setCatFilter] = useState<"all" | (typeof CATEGORIES)[number]>("all");
@@ -2004,18 +2021,18 @@ export function SyndicateAiChallengePanel() {
       try {
         let res = await fetchSyndicateProgress();
         if (cancelled) return;
-        if (Object.keys(res.state ?? {}).length > 0) {
-          applySyncedStateFromServer(res.state);
-        } else {
+        applySyncedStateFromServer(res.state ?? {});
+        if (Object.keys(res.state ?? {}).length === 0) {
           const local = collectSyncedState();
           if (Object.keys(local).length > 0) {
             res = await patchSyndicateProgress(local);
-            applySyncedStateFromServer(res.state);
+            applySyncedStateFromServer(res.state ?? {});
           }
         }
         if (!cancelled) {
           setStreak(res.streak_count);
           setLastActivityIso(res.last_activity_date);
+          setStreakBeforeBreakHint(streakBeforeBreakHintForProgress(res.streak_count, res.state));
         }
       } catch {
         /* offline / network — keep namespaced localStorage */
@@ -2069,12 +2086,13 @@ export function SyndicateAiChallengePanel() {
       try {
         const res = await fetchSyndicateProgress();
         if (cancelled) return;
-        applySyncedStateFromServer(res.state);
+        applySyncedStateFromServer(res.state ?? {});
         setPointsTotal(loadTotalPoints());
         setDoneIds(loadDoneIds());
         setMissionReminders(loadMissionReminders());
         setStreak(res.streak_count);
         setLastActivityIso(res.last_activity_date);
+        setStreakBeforeBreakHint(streakBeforeBreakHintForProgress(res.streak_count, res.state));
       } catch {
         /* offline */
       }
@@ -2808,9 +2826,10 @@ export function SyndicateAiChallengePanel() {
       setMissionStartMap({});
       try {
         const pr = await fetchSyndicateProgress();
+        applySyncedStateFromServer(pr.state ?? {});
         setStreak(pr.streak_count);
         setLastActivityIso(pr.last_activity_date);
-        applySyncedStateFromServer(pr.state ?? {});
+        setStreakBeforeBreakHint(streakBeforeBreakHintForProgress(pr.streak_count, pr.state));
         // New day ⇒ challenge IDs change; drop reminders so stale IDs are not synced back.
         window.localStorage.removeItem(ls("mission_reminders_v1"));
         persistMissionReminders({});
@@ -2963,6 +2982,7 @@ export function SyndicateAiChallengePanel() {
       window.localStorage.removeItem(ls("streak_break_date"));
       setStreak(restored.streak_count);
       setLastActivityIso(restored.last_activity_date);
+      setStreakBeforeBreakHint(null);
       onSyndicatePersist();
       setCanClaimRestore(false);
       setReferralMsg("Streak restored.");
@@ -3024,6 +3044,7 @@ export function SyndicateAiChallengePanel() {
           const sr = await postSyndicateStreakRecord(today);
           setStreak(sr.streak_count);
           setLastActivityIso(sr.last_activity_date);
+          if (sr.streak_count > 0) setStreakBeforeBreakHint(null);
         } catch {
           /* keep UI stale until next progress fetch */
         }
@@ -3290,6 +3311,7 @@ export function SyndicateAiChallengePanel() {
             const sr = await postSyndicateStreakRecord(today);
             setStreak(sr.streak_count);
             setLastActivityIso(sr.last_activity_date);
+            if (sr.streak_count > 0) setStreakBeforeBreakHint(null);
           } catch {
             /* streak stays stale until next progress fetch */
           }
@@ -3344,10 +3366,11 @@ export function SyndicateAiChallengePanel() {
     () => (showRestore ? restoreDaysLeft(nowTick) : 0),
     [showRestore, nowTick]
   );
-  const streakBeforeBreakCount = useMemo(
-    () => (streak === 0 && showRestore ? readStreakBeforeBreakCount() : null),
-    [streak, showRestore, nowTick]
-  );
+  const streakBeforeBreakCount = useMemo(() => {
+    if (streak !== 0 || !showRestore) return null;
+    if (streakBeforeBreakHint != null) return streakBeforeBreakHint;
+    return readStreakBeforeBreakCount();
+  }, [streak, showRestore, streakBeforeBreakHint, nowTick]);
   const openStreakRestoreSection = useCallback(() => {
     setShowStatsProfile(true);
     window.setTimeout(() => {
@@ -3884,18 +3907,18 @@ export function SyndicateAiChallengePanel() {
                   <p className="mt-2 text-[14px] font-semibold leading-relaxed text-amber-200/95">
                     {streakBeforeBreakCount != null ? (
                       <>
-                        Your streak was <span className="tabular-nums text-amber-50">{streakBeforeBreakCount}</span> day
-                        {streakBeforeBreakCount === 1 ? "" : "s"}; it is <span className="tabular-nums text-amber-50">0</span>{" "}
-                        now. You can still restore it — <span className="tabular-nums text-amber-50">{restoreDaysLeftCount}</span>{" "}
-                        calendar {restoreDaysLeftCount === 1 ? "day" : "days"} left (counts down each day; max{" "}
-                        {RESTORE_WINDOW_CALENDAR_DAYS} from the break).
+                        Your streak was <span className="tabular-nums text-amber-50">{streakBeforeBreakCount}</span> and now it is{" "}
+                        <span className="tabular-nums text-amber-50">0</span>. You can restore in the next{" "}
+                        <span className="tabular-nums text-amber-50">{restoreDaysLeftCount}</span>{" "}
+                        {restoreDaysLeftCount === 1 ? "day" : "days"} (max {RESTORE_WINDOW_CALENDAR_DAYS} calendar days from the break;
+                        the countdown drops by one each day).
                       </>
                     ) : (
                       <>
-                        Your streak is <span className="tabular-nums text-amber-50">0</span>. You can restore it during the next{" "}
+                        Your streak is <span className="tabular-nums text-amber-50">0</span>. You can restore in the next{" "}
                         <span className="tabular-nums text-amber-50">{restoreDaysLeftCount}</span>{" "}
-                        {restoreDaysLeftCount === 1 ? "day" : "days"} (one fewer each day; max {RESTORE_WINDOW_CALENDAR_DAYS} from the
-                        break).
+                        {restoreDaysLeftCount === 1 ? "day" : "days"} (one fewer each calendar day; max {RESTORE_WINDOW_CALENDAR_DAYS}{" "}
+                        from the break).
                       </>
                     )}
                   </p>
@@ -4302,7 +4325,7 @@ export function SyndicateAiChallengePanel() {
                     <SyndicateHelpMark topic="hud-streak" label="How streak works" onOpen={setSyndicateHelpPanel} />
                   </div>
                   <div className="mt-1 text-[20px] font-black text-fuchsia-100">
-                    🔥 {streak === 0 ? "0 days" : `${streak}d`}
+                    🔥 {streak} {streak === 1 ? "day" : "days"}
                   </div>
                   <div className="mt-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-fuchsia-200/80">Consecutive days</div>
                   <div className="mt-auto flex flex-1 flex-col justify-end gap-1.5 pt-2">
@@ -4312,14 +4335,13 @@ export function SyndicateAiChallengePanel() {
                           streakBeforeBreakCount != null ? (
                             <>
                               Your streak was <span className="font-black tabular-nums text-fuchsia-100">{streakBeforeBreakCount}</span>{" "}
-                              day{streakBeforeBreakCount === 1 ? "" : "s"}; now{" "}
-                              <span className="font-black tabular-nums text-fuchsia-100">0</span>. Restore within{" "}
+                              and now it is <span className="font-black tabular-nums text-fuchsia-100">0</span>. You can restore in the next{" "}
                               <span className="font-black tabular-nums text-fuchsia-100">{restoreDaysLeftCount}</span>{" "}
-                              {restoreDaysLeftCount === 1 ? "day" : "days"}. The number drops by 1 each new calendar day.
+                              {restoreDaysLeftCount === 1 ? "day" : "days"}. The countdown drops by one each calendar day.
                             </>
                           ) : (
                             <>
-                              Your streak is <span className="font-black tabular-nums text-fuchsia-100">0</span>. Restore within{" "}
+                              Your streak is <span className="font-black tabular-nums text-fuchsia-100">0</span>. You can restore in the next{" "}
                               <span className="font-black tabular-nums text-fuchsia-100">{restoreDaysLeftCount}</span>{" "}
                               {restoreDaysLeftCount === 1 ? "day" : "days"} — one fewer each calendar day.
                             </>
@@ -4340,7 +4362,7 @@ export function SyndicateAiChallengePanel() {
                     >
                       {showRestore ? (
                         <>
-                          Restore streak — {restoreDaysLeftCount} {restoreDaysLeftCount === 1 ? "day" : "days"} left
+                          Restore streak ({restoreDaysLeftCount} {restoreDaysLeftCount === 1 ? "day" : "days"} left)
                         </>
                       ) : (
                         "Restore streak"

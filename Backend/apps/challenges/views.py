@@ -68,8 +68,8 @@ def _normalize_streak_on_read(obj: SyndicateUserProgress, today) -> None:
     if (today - last).days < 2:
         return
     cur = dict(obj.state or {})
-    if "streak_before_break" not in cur:
-        cur["streak_before_break"] = str(obj.streak_count)
+    # Always refresh on a new normalization so stale JSON cannot show an old "was X" after a later break.
+    cur["streak_before_break"] = str(obj.streak_count)
     cur["streak_break_date"] = today.isoformat()
     obj.streak_count = 0
     obj.state = cur
